@@ -840,7 +840,6 @@ function PermitCardInner({
     }
 
     onChange?.({
-      ...data,
       replacementCode: undefined,
       isResend: false,
       emailType: "SEND_CONCESSION",

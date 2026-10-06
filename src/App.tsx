@@ -26,7 +26,7 @@ import { INITIAL_DEMO_CSV } from "./data/defaultCsv";
 import { isVrmSilentBlockedSync } from "./lib/blocklist";
 import { CsvPermitRecord, parsePermitCsv, parseDateToISO, addDays, formatPhoneNumber, ParsedVoucherData, addDaysSafe, parseDateRange, getDatesInRange, cleanVoucherCodeValue, exportToExcel, isVoucherCodeMatch, sortRecordsByFormIdDesc, getMatchingPermits, isDateRequiredOutsideValidWindow, isPermitExpiredBackdate, getTodayISO, checkIsBlockedDuplicate, parseFullDateTimeMs, normalizeVouchersList, isRecordCancelled, getRequestedPermitDateISO, isVoucherExactPeriodEligible, isVoucherAvailableStatus, isVoucherVrmCompatible, clearDuplicateCheckCache, extractRecordSubmissionTimeMs, extractRecordNumericFormId } from "./utils/csvParser";
 // ⭐ FIX: Import canonical voucher validation helper
-import { isVoucherForPermitDateRange } from "./utils/voucherValidation";
+import { isVoucherForPermitDateRange, validateManualVoucherChange } from "./utils/voucherValidation";
 import { CsvDatabasePanel, type CsvDatabasePanelHandle } from "./components/CsvDatabasePanel";
 import { BlocklistPanel } from "./components/BlocklistPanel";
 import { EditRecordModal } from "./components/EditRecordModal";
@@ -947,6 +947,18 @@ export default function App() {
 
   // Helper to clear replacement state and promote replacement code to primary code on successful dispatch
   const handleReplacementSuccessCleanup = (targetRecord: CsvPermitRecord) => {
+    // If targetRecord is already clean and marked as dispatched SENT, nothing to clean up
+    if (
+      targetRecord.status === "SENT" &&
+      targetRecord.isDispatched === true &&
+      !targetRecord.replacementCode &&
+      !targetRecord.isResend &&
+      !targetRecord.emailType &&
+      !targetRecord.emailTemplate
+    ) {
+      return;
+    }
+
     const isTargetReplacement = Boolean(
       targetRecord.replacementCode ||
       targetRecord.emailType === "RESEND_CONCESSION" ||
@@ -2032,6 +2044,7 @@ export default function App() {
 
         setDatabase((prevDb) => {
           let matchedTarget = false;
+          let hasRecordChanged = false;
           const nextDb = prevDb.map((rec) => {
             // Check match using canonical isRecordMatch utility
             const isMatch = isRecordMatch(rec, candidateTarget);
@@ -2039,20 +2052,45 @@ export default function App() {
             // If ID/formId matched or first single matching record
             if (isMatch && (!matchedTarget || targetId || targetFormId)) {
               matchedTarget = true;
+              const newVoucher = updates.voucherCodesText || rec.voucherCode || "";
+              const newPrePaid = updates.voucherCodesText || rec.prePaidCode || "";
+              const newStatus = updates.status || rec.status;
+              const newRepCode = hasRep ? (updates.replacementCode || updates.voucherCodesText || rec.replacementCode) : rec.replacementCode;
+              const newIsResend = hasRep ? true : rec.isResend;
+              const newEmailType = hasRep ? "RESEND_CONCESSION" : rec.emailType;
+              const newEmailTemplate = hasRep ? "replacement" : rec.emailTemplate;
+
+              if (
+                rec.voucherCode === newVoucher &&
+                rec.prePaidCode === newPrePaid &&
+                rec.status === newStatus &&
+                rec.replacementCode === newRepCode &&
+                rec.isResend === newIsResend &&
+                rec.emailType === newEmailType &&
+                rec.emailTemplate === newEmailTemplate
+              ) {
+                return rec;
+              }
+
+              hasRecordChanged = true;
               return {
                 ...rec,
-                voucherCode: updates.voucherCodesText || rec.voucherCode || "",
-                prePaidCode: updates.voucherCodesText || rec.prePaidCode || "",
-                status: updates.status || rec.status,
-                replacementCode: hasRep ? (updates.replacementCode || updates.voucherCodesText || rec.replacementCode) : rec.replacementCode,
-                isResend: hasRep ? true : rec.isResend,
-                emailType: hasRep ? "RESEND_CONCESSION" : rec.emailType,
-                emailTemplate: hasRep ? "replacement" : rec.emailTemplate
+                voucherCode: newVoucher,
+                prePaidCode: newPrePaid,
+                status: newStatus,
+                replacementCode: newRepCode,
+                isResend: newIsResend,
+                emailType: newEmailType,
+                emailTemplate: newEmailTemplate
               };
             }
 
             return rec;
           });
+
+          if (!hasRecordChanged || !matchedTarget) {
+            return prevDb;
+          }
 
           databaseRef.current = nextDb;
           safeLocalStorage.setItem("concessions_permit_db", JSON.stringify(nextDb));
@@ -2263,6 +2301,29 @@ export default function App() {
   };
 
   const handleSaveRecord = async (updatedRecord: CsvPermitRecord) => {
+    // Defense-in-depth: Validate changed voucher code using canonical Active Date Code rules
+    if (editingRecord && updatedRecord.voucherCode) {
+      const origCode = cleanVoucherCodeValue(
+        editingResolvedVoucherCode ||
+        editingRecord.voucherCode ||
+        (editingRecord as any).prePaidCode ||
+        ""
+      ).trim().toUpperCase();
+
+      const validation = validateManualVoucherChange({
+        origCode,
+        newCode: updatedRecord.voucherCode,
+        permitDateRequired: updatedRecord.dateRequired || updatedRecord.validFrom || "",
+        permitDateExpiry: updatedRecord.dateExpiry || updatedRecord.validTo || "",
+        vouchersDatabase
+      });
+
+      if (!validation.isValid) {
+        showToast(validation.error || "This voucher code is not valid for the selected permit date range.", "error");
+        return;
+      }
+    }
+
     let recordFound = false;
     const updatedDb = (database || []).map(item => {
       if (isRecordMatch(item, updatedRecord)) {

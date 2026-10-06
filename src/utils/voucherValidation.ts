@@ -177,6 +177,138 @@ export function isVoucherForPermitDateRange(
 }
 
 /**
+ * Formats an ISO YYYY-MM-DD or standard date string to UK DD/MM/YYYY
+ */
+export function formatDateUK(dateStr: string | undefined | null): string {
+  if (!dateStr) return "";
+  const s = String(dateStr).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const [y, m, d] = s.split("-");
+    return `${d}/${m}/${y}`;
+  }
+  const ukMatch = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+  if (ukMatch) {
+    return `${ukMatch[1].padStart(2, "0")}/${ukMatch[2].padStart(2, "0")}/${ukMatch[3]}`;
+  }
+  return s;
+}
+
+export interface ValidateManualVoucherResult {
+  isValid: boolean;
+  error?: string;
+  matchingVoucher?: ParsedVoucherData;
+}
+
+/**
+ * Validates manually changed/edited voucher codes using the canonical Active Date Codes
+ * validation rules (isVoucherForPermitDateRange and allocation exclusion).
+ */
+export function validateManualVoucherChange(params: {
+  origCode?: string | null;
+  newCode?: string | null;
+  permitDateRequired: string;
+  permitDateExpiry?: string;
+  vouchersDatabase?: ParsedVoucherData[] | null;
+  assignedCodesInOtherRecords?: Set<string>;
+}): ValidateManualVoucherResult {
+  const {
+    origCode,
+    newCode,
+    permitDateRequired,
+    permitDateExpiry,
+    vouchersDatabase,
+    assignedCodesInOtherRecords
+  } = params;
+
+  const cleanOrig = cleanVoucherCodeValue(origCode || "").trim().toUpperCase();
+  const cleanNew = cleanVoucherCodeValue(newCode || "").trim().toUpperCase();
+
+  const isSpecialStatus = (code: string): boolean => {
+    return (
+      !code ||
+      code === "-" ||
+      code === "CANCELLED" ||
+      code === "BLOCKED" ||
+      code === "EXPIRED" ||
+      code === "PENDING" ||
+      code === "N/A"
+    );
+  };
+
+  // Step 1 — Detect changed code. Unchanged codes or special non-voucher statuses pass through.
+  if (!cleanNew || isSpecialStatus(cleanNew) || cleanNew === cleanOrig) {
+    return { isValid: true };
+  }
+
+  // Step 2 — If the new code corresponds to a voucher in vouchersDatabase
+  if (vouchersDatabase && vouchersDatabase.length > 0) {
+    const matchingVoucher = vouchersDatabase.find(v => {
+      if (!v || !v.code) return false;
+      const c = cleanVoucherCodeValue(v.code).toUpperCase();
+      return c === cleanNew;
+    });
+
+    if (matchingVoucher) {
+      // Validate using EXACTLY isVoucherForPermitDateRange
+      const isDateValid = isVoucherForPermitDateRange(
+        matchingVoucher,
+        permitDateRequired,
+        permitDateExpiry || permitDateRequired
+      );
+
+      if (!isDateValid) {
+        const vFromIso = getVoucherValidFromISO(matchingVoucher);
+        const vToIso = getVoucherValidToISO(matchingVoucher);
+        const vFromUK = formatDateUK(vFromIso);
+        const vToUK = formatDateUK(vToIso);
+        const pFromUK = formatDateUK(normalizeDateToISO(permitDateRequired));
+        const pToUK = formatDateUK(normalizeDateToISO(permitDateExpiry || permitDateRequired));
+
+        let msg = "This voucher code is not valid for the selected permit date range.";
+        if (vFromUK && vToUK) {
+          msg += `\n\nValid voucher dates:\n${vFromUK} – ${vToUK}`;
+        }
+        if (pFromUK && pToUK) {
+          msg += `\n\nPermit date range:\n${pFromUK} – ${pToUK}`;
+        }
+
+        return {
+          isValid: false,
+          error: msg,
+          matchingVoucher
+        };
+      }
+
+      // Step 3 — Check whether the code is already assigned / used
+      if (
+        (assignedCodesInOtherRecords && assignedCodesInOtherRecords.has(cleanNew)) ||
+        matchingVoucher.isUsed === true ||
+        matchingVoucher.status === "used" ||
+        matchingVoucher.status === "dispatched"
+      ) {
+        return {
+          isValid: false,
+          error: `This voucher code (${cleanNew}) is already assigned to another permit.`,
+          matchingVoucher
+        };
+      }
+
+      return { isValid: true, matchingVoucher };
+    }
+  }
+
+  // Step 3 (cont.) — If code is not found in vouchersDatabase or no vouchersDatabase, verify not assigned to another active permit
+  if (assignedCodesInOtherRecords && assignedCodesInOtherRecords.has(cleanNew)) {
+    return {
+      isValid: false,
+      error: `This voucher code (${cleanNew}) is already assigned to another permit.`
+    };
+  }
+
+  return { isValid: true };
+}
+
+/**
  * Validates whether a voucher code exists in the vouchers database (CSV).
  * Returns true if valid, false if invalid (or if not in database).
  * If no vouchers database is uploaded yet, returns true (permissive when empty).

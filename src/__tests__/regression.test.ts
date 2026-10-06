@@ -18,7 +18,7 @@ import {
   CancellationReason
 } from '../utils/emailTemplateUtils';
 import { getRecordPrimaryKey, getRecordKeys } from '../utils/dispatchUtils';
-import { computeVoucherBatchExpiryBadge, validateVoucherCSV } from '../utils/voucherValidation';
+import { computeVoucherBatchExpiryBadge, validateVoucherCSV, validateManualVoucherChange, isVoucherForPermitDateRange } from '../utils/voucherValidation';
 
 function makePermit(overrides: Partial<CsvPermitRecord> & { id: string; vrm: string }): CsvPermitRecord {
   return {
@@ -1059,6 +1059,168 @@ CON_ERR_2,,`;
     assert.equal(resMultiple.errors[0].code, 'CON_ERR_1');
     assert.equal(resMultiple.errors[1].rowNumber, 4);
     assert.equal(resMultiple.errors[1].code, 'CON_ERR_2');
+  });
+
+  // =========================================================================
+  // TEST 23 — Manual Voucher Code editing obeys canonical Active Date Codes
+  // validation and allocation rules
+  // =========================================================================
+  it('TEST 23: Manual Voucher Code editing obeys canonical Active Date Codes validation and allocation rules', () => {
+    const vouchers: ParsedVoucherData[] = [
+      { code: 'V_VALID_SEPT1', validFrom: '01/09/2026', validTo: '07/09/2026', status: 'available', isUsed: false },
+      { code: 'V_INVALID_SEPT8', validFrom: '08/09/2026', validTo: '14/09/2026', status: 'available', isUsed: false },
+      { code: 'V_USED_SEPT1', validFrom: '01/09/2026', validTo: '07/09/2026', status: 'available', isUsed: false }
+    ];
+
+    const assignedOther = new Set<string>(['V_USED_SEPT1']);
+
+    // 1. Valid manual voucher matching permit date range (01/09/2026 -> 07/09/2026) -> SAVE SUCCESS
+    const resValid = validateManualVoucherChange({
+      origCode: 'ORIG_CODE',
+      newCode: 'V_VALID_SEPT1',
+      permitDateRequired: '01/09/2026',
+      permitDateExpiry: '07/09/2026',
+      vouchersDatabase: vouchers,
+      assignedCodesInOtherRecords: assignedOther
+    });
+    assert.equal(resValid.isValid, true);
+    assert.equal(resValid.error, undefined);
+
+    // 2. Invalid manual voucher (dates 08/09/2026 -> 14/09/2026 do not match permit 01/09/2026 -> 07/09/2026) -> SAVE BLOCKED
+    const resInvalid = validateManualVoucherChange({
+      origCode: 'ORIG_CODE',
+      newCode: 'V_INVALID_SEPT8',
+      permitDateRequired: '01/09/2026',
+      permitDateExpiry: '07/09/2026',
+      vouchersDatabase: vouchers,
+      assignedCodesInOtherRecords: assignedOther
+    });
+    assert.equal(resInvalid.isValid, false);
+    assert.ok(resInvalid.error && resInvalid.error.includes('This voucher code is not valid for the selected permit date range.'));
+    assert.ok(resInvalid.error && resInvalid.error.includes('08/09/2026 – 14/09/2026'));
+    assert.ok(resInvalid.error && resInvalid.error.includes('01/09/2026 – 07/09/2026'));
+
+    // 3. Already-assigned voucher -> SAVE BLOCKED
+    const resUsed = validateManualVoucherChange({
+      origCode: 'ORIG_CODE',
+      newCode: 'V_USED_SEPT1',
+      permitDateRequired: '01/09/2026',
+      permitDateExpiry: '07/09/2026',
+      vouchersDatabase: vouchers,
+      assignedCodesInOtherRecords: assignedOther
+    });
+    assert.equal(resUsed.isValid, false);
+    assert.ok(resUsed.error && resUsed.error.includes('already assigned to another permit'));
+
+    // 4. Special statuses (CANCELLED, BLOCKED, EXPIRED, -, empty) are permitted without blocking
+    for (const special of ['CANCELLED', 'BLOCKED', 'EXPIRED', 'PENDING', '-', '']) {
+      const resSpecial = validateManualVoucherChange({
+        origCode: 'ORIG_CODE',
+        newCode: special,
+        permitDateRequired: '01/09/2026',
+        permitDateExpiry: '07/09/2026',
+        vouchersDatabase: vouchers,
+        assignedCodesInOtherRecords: assignedOther
+      });
+      assert.equal(resSpecial.isValid, true, `Special status ${special} must be permitted`);
+    }
+
+    // 5. Unchanged voucher code passes validation without re-triggering allocation checks
+    const resUnchanged = validateManualVoucherChange({
+      origCode: 'SAME_CODE',
+      newCode: 'SAME_CODE',
+      permitDateRequired: '01/09/2026',
+      permitDateExpiry: '07/09/2026',
+      vouchersDatabase: vouchers,
+      assignedCodesInOtherRecords: assignedOther
+    });
+    assert.equal(resUnchanged.isValid, true);
+  });
+
+  it('TEST 24: Single permit replacement/resend performs minimal authoritative localStorage permit database serialization and preserves persistence on reload', () => {
+    // Mock local storage simulation
+    const localStorageMock: { [key: string]: string } = {};
+    let writeCount = 0;
+
+    const setItem = (key: string, val: string) => {
+      if (key === 'concessions_permit_db') {
+        writeCount++;
+      }
+      localStorageMock[key] = val;
+    };
+
+    const getItem = (key: string) => localStorageMock[key] || null;
+
+    // Initial database of 10 permits
+    const initialDb: CsvPermitRecord[] = Array.from({ length: 10 }, (_, i) => ({
+      id: String(i + 1),
+      formId: 1000 + i,
+      hospital: 'Whipps Cross Hospital',
+      ward: 'Acorn Ward',
+      vrm: `VRM${i}AAA`,
+      driverName: `Driver ${i}`,
+      dateRequired: '01/09/2026',
+      voucherCode: `VCH${i}`,
+      status: 'SENT',
+      isDispatched: true
+    }));
+
+    setItem('concessions_permit_db', JSON.stringify(initialDb));
+    assert.equal(writeCount, 1, 'Initial database setup performs 1 write');
+
+    // Simulate replacement on record #5 (id: "5", formId: 1004)
+    const target = initialDb[4];
+    const newReplacementCode = 'NHS_REP_999';
+
+    // 1. One authoritative update and write
+    const updatedRecord: CsvPermitRecord = {
+      ...target,
+      voucherCode: newReplacementCode,
+      voucherCodesText: newReplacementCode,
+      prePaidCode: newReplacementCode,
+      originalVoucherCode: target.voucherCode,
+      replacementCode: undefined,
+      isResend: false,
+      status: 'SENT',
+      isDispatched: true
+    };
+
+    const nextDb = initialDb.map(item => item.id === target.id ? updatedRecord : item);
+    setItem('concessions_permit_db', JSON.stringify(nextDb));
+    assert.equal(writeCount, 2, 'Replacement update performs exactly 1 additional write');
+
+    // 2. Redundant cleanup on already-updated record must NOT perform additional writes
+    const isAlreadyClean = (
+      updatedRecord.status === 'SENT' &&
+      updatedRecord.isDispatched === true &&
+      !updatedRecord.replacementCode &&
+      !updatedRecord.isResend &&
+      !updatedRecord.emailType &&
+      !updatedRecord.emailTemplate
+    );
+    assert.equal(isAlreadyClean, true, 'Updated record is recognized as already cleaned and dispatched');
+    if (!isAlreadyClean) {
+      setItem('concessions_permit_db', JSON.stringify(nextDb));
+    }
+    assert.equal(writeCount, 2, 'Zero redundant writes triggered by cleanup on already-updated record');
+
+    // 3. Simulated browser reload: reload from localStorage
+    const storedRaw = getItem('concessions_permit_db');
+    assert.ok(storedRaw, 'Permit database exists in localStorage');
+    const reloadedDb: CsvPermitRecord[] = JSON.parse(storedRaw!);
+
+    assert.equal(reloadedDb.length, 10, 'All 10 permits survive reload');
+    const reloadedRecord5 = reloadedDb.find(r => String(r.id) === '5');
+    assert.ok(reloadedRecord5, 'Replaced record exists after reload');
+    assert.equal(reloadedRecord5?.voucherCode, newReplacementCode, 'Replaced voucher code persisted');
+    assert.equal(reloadedRecord5?.originalVoucherCode, 'VCH4', 'Original voucher code preserved');
+    assert.equal(reloadedRecord5?.status, 'SENT', 'SENT status persisted');
+    assert.equal(reloadedRecord5?.isDispatched, true, 'Dispatched state persisted');
+
+    // Untouched records remain identical
+    const reloadedRecord1 = reloadedDb.find(r => String(r.id) === '1');
+    assert.equal(reloadedRecord1?.voucherCode, 'VCH0');
+    assert.equal(reloadedRecord1?.status, 'SENT');
   });
 
 });

@@ -11,7 +11,7 @@ import {
   getRequestedPermitDateISO
 } from "../utils/csvParser";
 import { isVrmSilentBlockedSync } from "../lib/blocklist";
-import { isVoucherForPermitDateRange, cleanVoucherCodeValue } from "../utils/voucherValidation";
+import { isVoucherForPermitDateRange, cleanVoucherCodeValue, validateManualVoucherChange } from "../utils/voucherValidation";
 import { HOSPITAL_SITES } from "../types";
 
 interface EditRecordModalProps {
@@ -46,6 +46,7 @@ export function EditRecordModal({
   const [formVoucherCode, setFormVoucherCode] = useState("");
   const [formReplacementCode, setFormReplacementCode] = useState("");
   const [formStatus, setFormStatus] = useState("PENDING");
+  const [validationError, setValidationError] = useState<string | null>(null);
 
   // Resolve any real code found directly on record itself,
   // ignoring placeholder/display values like "-" or "CANCELLED".
@@ -318,6 +319,7 @@ export function EditRecordModal({
   };
 
   const handleActiveDateCodeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setValidationError(null);
     const selectedCode = cleanVoucherCodeValue(e.target.value).toUpperCase();
     if (!selectedCode || selectedCode === "-" || selectedCode === "CANCELLED" || selectedCode === "BLOCKED") {
       setFormReplacementCode("");
@@ -335,6 +337,7 @@ export function EditRecordModal({
 
   // Populate form fields whenever `record` changes or modal opens
   useEffect(() => {
+    setValidationError(null);
     if (record && isOpen) {
       setFormVrm(record.vrm ? record.vrm.toUpperCase() : "");
       setFormDriverName(record.driverName || record.name || "");
@@ -390,6 +393,7 @@ export function EditRecordModal({
   if (!isOpen || !record) return null;
 
   const handleDateRequiredChange = (newDate: string) => {
+    setValidationError(null);
     setFormDateRequired(newDate);
     if (newDate) {
       // Automatically keep expiry synced to 6 days after date required
@@ -400,12 +404,53 @@ export function EditRecordModal({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!record) return;
+    setValidationError(null);
 
     const trimmedVrm = formVrm.trim().toUpperCase();
     const cleanVoucher = formVoucherCode.trim().toUpperCase() || "-";
 
     const isCancelledFinal = formStatus === "CANCELLED" || cleanVoucher === "CANCELLED";
     const hasReplacement = Boolean(formReplacementCode && formReplacementCode !== "-" && !isCancelledFinal);
+
+    // Step 1 — Detect changed code and validate using canonical Active Date Code rules
+    const origCode = cleanVoucherCodeValue(
+      canonicalRecordCode ||
+      record.voucherCode ||
+      (record as any).prePaidCode ||
+      (record as any).voucherCodesText ||
+      ""
+    ).trim().toUpperCase();
+
+    const voucherValidation = validateManualVoucherChange({
+      origCode,
+      newCode: cleanVoucher,
+      permitDateRequired: formDateRequired,
+      permitDateExpiry: formDateExpiry || (formDateRequired ? addDays(formDateRequired, 6) : ""),
+      vouchersDatabase,
+      assignedCodesInOtherRecords
+    });
+
+    if (!voucherValidation.isValid) {
+      setValidationError(voucherValidation.error || "This voucher code is not valid for the selected permit date range.");
+      return;
+    }
+
+    if (hasReplacement && formReplacementCode) {
+      const origRep = cleanVoucherCodeValue(record.replacementCode || "").trim().toUpperCase();
+      const repValidation = validateManualVoucherChange({
+        origCode: origRep,
+        newCode: formReplacementCode,
+        permitDateRequired: formDateRequired,
+        permitDateExpiry: formDateExpiry || (formDateRequired ? addDays(formDateRequired, 6) : ""),
+        vouchersDatabase,
+        assignedCodesInOtherRecords
+      });
+
+      if (!repValidation.isValid) {
+        setValidationError(repValidation.error || "This replacement voucher code is not valid for the selected permit date range.");
+        return;
+      }
+    }
 
     const updatedRecord: CsvPermitRecord = {
       ...record,
@@ -623,9 +668,14 @@ export function EditRecordModal({
               <input
                 type="text"
                 value={formVoucherCode}
-                onChange={(e) => setFormVoucherCode(e.target.value.toUpperCase())}
+                onChange={(e) => {
+                  setFormVoucherCode(e.target.value.toUpperCase());
+                  setValidationError(null);
+                }}
                 placeholder="e.g. 5X7B-9Q2M or -"
-                className="w-full px-3 py-2 text-sm font-mono uppercase rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#071728] text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className={`w-full px-3 py-2 text-sm font-mono uppercase rounded-lg border ${
+                  validationError ? "border-rose-500 focus:ring-rose-500" : "border-slate-300 dark:border-slate-700"
+                } bg-white dark:bg-[#071728] text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500`}
               />
             </div>
 
@@ -670,6 +720,14 @@ export function EditRecordModal({
             </div>
 
           </div>
+
+          {/* Validation Error Alert */}
+          {validationError && (
+            <div className="p-3.5 bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 rounded-lg text-rose-700 dark:text-rose-300 text-xs flex items-start gap-2.5 whitespace-pre-line animate-in fade-in">
+              <span className="text-base leading-none shrink-0 mt-0.5">⚠️</span>
+              <div className="flex-1 font-semibold">{validationError}</div>
+            </div>
+          )}
 
           {/* Form Actions */}
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-200 dark:border-[#193555]">
