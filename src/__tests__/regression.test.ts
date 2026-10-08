@@ -1223,4 +1223,75 @@ CON_ERR_2,,`;
     assert.equal(reloadedRecord1?.status, 'SENT');
   });
 
+  // =========================================================================
+  // TEST 25 — Edit Record VRM / driver name persistence & cross-device sync
+  // 1. VRM / Driver Name modification matches record by ID regardless of VRM change.
+  // 2. getNormalizedPermitKey normalizes # prefixes and empty IDs.
+  // 3. Merging Supabase permits into local state overwrites stale local records.
+  // 4. Reconnecting to cloud does not overwrite cloud permits with stale offline data.
+  // =========================================================================
+  it('TEST 25: Edit Record VRM and driver name edits persist and sync cleanly across devices', async () => {
+    const { getNormalizedPermitKey, isRecordMatch } = await import('../utils/dispatchUtils');
+
+    // 1. Normalized key handles numeric, string, '#', and empty IDs
+    assert.equal(getNormalizedPermitKey({ id: '2092' }), '2092');
+    assert.equal(getNormalizedPermitKey({ formId: '#2092' }), '2092');
+    assert.equal(getNormalizedPermitKey({ id: 'row-5', formId: '2092' }), '2092');
+    assert.equal(getNormalizedPermitKey({ id: 'row-5' }), 'row-5');
+
+    // 2. Record matching by ID succeeds even when VRM has changed
+    const originalPermit: CsvPermitRecord = {
+      id: '2092',
+      formId: '2092',
+      vrm: 'OLD123',
+      driverName: 'Original Driver',
+      dateRequired: '2026-10-07',
+      dateExpiry: '2026-10-13',
+      hospital: 'Whipps Cross Hospital',
+      ward: 'Acorn Ward',
+      status: 'PENDING'
+    };
+
+    const editedPermit: CsvPermitRecord = {
+      ...originalPermit,
+      vrm: 'NEW999',
+      driverName: 'Updated Driver'
+    };
+
+    assert.equal(isRecordMatch(originalPermit, editedPermit), true, 'Records with same ID match even with changed VRM');
+
+    // 3. Simulating cross-device sync:
+    // Device A edits the permit and updates Supabase.
+    // Device B has old permit in localStorage (OLD123).
+    const localDbDeviceB: CsvPermitRecord[] = [originalPermit];
+    const incomingFromSupabase: CsvPermitRecord[] = [editedPermit];
+
+    // O(1) map merge as used in refreshDatabase
+    const deviceBMap = new Map<string, CsvPermitRecord>();
+    for (const rec of localDbDeviceB) {
+      const key = getNormalizedPermitKey(rec);
+      if (key) deviceBMap.set(key, rec);
+    }
+
+    for (const dbRec of incomingFromSupabase) {
+      const key = getNormalizedPermitKey(dbRec);
+      deviceBMap.set(key || String(dbRec.id), dbRec);
+    }
+
+    const reconciledDeviceB = Array.from(deviceBMap.values());
+    assert.equal(reconciledDeviceB.length, 1, 'Merged database has 1 record');
+    assert.equal(reconciledDeviceB[0].vrm, 'NEW999', 'Device B has updated VRM from Supabase');
+    assert.equal(reconciledDeviceB[0].driverName, 'Updated Driver', 'Device B has updated Driver Name from Supabase');
+
+    // 4. Offline reconnect check:
+    // Device B reconnecting does NOT push stale permits over cloud permits that already exist
+    const existingCloudKeys = new Set(incomingFromSupabase.map(r => getNormalizedPermitKey(r)).filter(Boolean));
+    const staleLocalPermits = [originalPermit];
+    const permitsToPush = staleLocalPermits.filter(r => {
+      const key = getNormalizedPermitKey(r);
+      return key && !existingCloudKeys.has(key);
+    });
+    assert.equal(permitsToPush.length, 0, 'Zero stale permits pushed to cloud on reconnect');
+  });
+
 });

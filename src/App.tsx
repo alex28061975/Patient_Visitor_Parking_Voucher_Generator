@@ -18,7 +18,8 @@ import {
   getAllDispatchedKeys,
   batchCheckIsRecordDispatched,
   isRecordMatch,
-  isPlaceholderVrm
+  isPlaceholderVrm,
+  getNormalizedPermitKey
 } from "./utils/dispatchUtils";
 
 // CSV Database Imports
@@ -1437,14 +1438,14 @@ export default function App() {
           // O(1) indexed Map merge: preserve any local records older than 90 days
           const currentDbMap = new Map<string, CsvPermitRecord>();
           for (const rec of currentDb) {
-            const key = String(rec.formId || rec.id || "");
+            const key = getNormalizedPermitKey(rec);
             if (key) currentDbMap.set(key, rec);
           }
 
           const mergedMap = new Map<string, CsvPermitRecord>(currentDbMap);
 
           for (const dbRec of dbPermits) {
-            const key = String(dbRec.formId || dbRec.id || "");
+            const key = getNormalizedPermitKey(dbRec);
             const localMatch = key ? currentDbMap.get(key) : undefined;
             if (localMatch && (localMatch.replacementCode || localMatch.isResend || localMatch.emailTemplate === "replacement")) {
               mergedMap.set(key || String(dbRec.id), {
@@ -1464,6 +1465,58 @@ export default function App() {
           databaseRef.current = reconciled;
           setDatabase(reconciled);
           safeLocalStorage.setItem("concessions_permit_db", JSON.stringify(reconciled));
+        }
+
+        // ⭐ CRITICAL: Always synchronize active permit formData with authoritative database state
+        const currentPermits = databaseRef.current;
+        if (currentPermits && currentPermits.length > 0) {
+          setFormData(prev => {
+            const matched = currentPermits.find(r => isRecordMatch(r, prev));
+            if (!matched) return prev;
+
+            const cleanVrmMatched = (matched.vrm ? matched.vrm.toUpperCase() : "");
+            const cleanNameMatched = (matched.driverName ? toTitleCase(matched.driverName) : "");
+            const cleanWardMatched = (matched.ward ? toTitleCase(matched.ward) : "");
+            const cleanSiteMatched = (matched.hospital || "");
+            const cleanDateMatched = (matched.validFrom || matched.dateRequired || "");
+            const cleanPhoneMatched = formatPhoneNumber(matched.phone || "");
+            const cleanEmailMatched = (matched.email || "").toLowerCase();
+
+            if (
+              prev.vrm === cleanVrmMatched &&
+              prev.name === cleanNameMatched &&
+              prev.site === cleanSiteMatched &&
+              prev.ward === cleanWardMatched &&
+              prev.validFrom === cleanDateMatched &&
+              prev.phone === cleanPhoneMatched &&
+              prev.email === cleanEmailMatched
+            ) {
+              return prev;
+            }
+
+            const hasRep = Boolean(matched.replacementCode || prev.replacementCode);
+            const repCode = matched.replacementCode || prev.replacementCode;
+            const vCode = hasRep ? repCode : (matched.voucherCode || prev.voucherCodesText || "-");
+
+            return {
+              ...prev,
+              id: matched.id || prev.id,
+              formId: matched.formId || prev.formId,
+              site: cleanSiteMatched || prev.site,
+              name: cleanNameMatched || prev.name,
+              vrm: cleanVrmMatched || prev.vrm,
+              ward: cleanWardMatched || prev.ward,
+              validFrom: cleanDateMatched || prev.validFrom,
+              validTo: matched.validTo || matched.dateExpiry || prev.validTo,
+              phone: cleanPhoneMatched || prev.phone,
+              email: cleanEmailMatched || prev.email,
+              voucherCodesText: vCode,
+              status: matched.status || prev.status,
+              startTime: matched.startTime || prev.startTime,
+              completionTime: matched.completionTime || prev.completionTime,
+              createdAt: matched.createdAt || prev.createdAt
+            };
+          });
         }
 
         const countFromDb = (dbPermits as { totalCount?: number }).totalCount;
@@ -1601,9 +1654,21 @@ export default function App() {
         try { if (localDatesStr) localDates = JSON.parse(localDatesStr); } catch (e) {}
         try { if (localByStr) localBy = JSON.parse(localByStr); } catch (e) {}
 
-        // 1. Bulk sync local permits to Supabase if any exist
+        // 1. Bulk sync local permits to Supabase if any exist, but NEVER overwrite newer cloud records with stale offline records
         if (localPermits.length > 0) {
-          await syncPermitsToSupabase(localPermits, false);
+          const existingCloudPermits = await fetchPermitsFromSupabase({ daysLimit: 365 });
+          const existingCloudKeys = new Set(
+            (existingCloudPermits || []).map(r => getNormalizedPermitKey(r)).filter(Boolean)
+          );
+
+          const brandNewLocalPermits = localPermits.filter(r => {
+            const key = getNormalizedPermitKey(r);
+            return key && !existingCloudKeys.has(key);
+          });
+
+          if (brandNewLocalPermits.length > 0) {
+            await syncPermitsToSupabase(brandNewLocalPermits, false);
+          }
         }
 
         // 2. Bulk sync local vouchers to Supabase if any exist
@@ -2324,6 +2389,28 @@ export default function App() {
       }
     }
 
+    // ⭐ If in Cloud mode, update Supabase first and NEVER report success if cloud update fails
+    if (storageModeRef.current === "cloud" && isSupabaseConfigured()) {
+      setIsSyncing(true);
+      try {
+        const cloudSuccess = await updatePermitInSupabase(updatedRecord);
+        if (!cloudSuccess) {
+          showToast("Failed to save changes to Supabase cloud database. Record was not updated.", "error");
+          setIsSyncing(false);
+          return false;
+        }
+      } catch (err: any) {
+        console.error("Cloud persistence error:", err);
+        showToast(`Failed to persist changes to Supabase: ${err?.message || 'Network error'}`, "error");
+        setIsSyncing(false);
+        return false;
+      } finally {
+        setIsSyncing(false);
+      }
+    }
+
+    lastUserActionTimestampRef.current = Date.now();
+
     let recordFound = false;
     const updatedDb = (database || []).map(item => {
       if (isRecordMatch(item, updatedRecord)) {
@@ -2381,10 +2468,10 @@ export default function App() {
       const hasReplacement = Boolean(updatedRecord.replacementCode);
       setFormData(prev => ({
         ...prev,
-        site: updatedRecord.hospital,
-        name: updatedRecord.driverName ? toTitleCase(updatedRecord.driverName) : "",
-        vrm: updatedRecord.vrm ? updatedRecord.vrm.toUpperCase() : "",
-        ward: updatedRecord.ward ? toTitleCase(updatedRecord.ward) : "",
+        site: updatedRecord.hospital || prev.site,
+        name: updatedRecord.driverName ? toTitleCase(updatedRecord.driverName) : (prev.name || ""),
+        vrm: updatedRecord.vrm ? updatedRecord.vrm.toUpperCase() : (prev.vrm || ""),
+        ward: updatedRecord.ward ? toTitleCase(updatedRecord.ward) : (prev.ward || ""),
         validFrom: updatedRecord.validFrom || updatedRecord.dateRequired || prev.validFrom,
         validTo: updatedRecord.validTo || updatedRecord.dateExpiry || prev.validTo,
         phone: formatPhoneNumber(updatedRecord.phone || ""),
@@ -2398,13 +2485,10 @@ export default function App() {
       }));
     }
 
-    if (storageModeRef.current === "cloud" && isSupabaseConfigured()) {
-      await updatePermitInSupabase(updatedRecord);
-    }
-
     showToast("Permit record updated successfully.", "success");
     setIsEditModalOpen(false);
     setEditingRecord(null);
+    return true;
   };
 
   // ⭐ FIXED: reconcile incoming Excel records with the existing database BEFORE duplicate cancellation.

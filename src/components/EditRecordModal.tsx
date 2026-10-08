@@ -20,7 +20,7 @@ interface EditRecordModalProps {
   database: CsvPermitRecord[];
   vouchersDatabase: ParsedVoucherData[];
   onClose: () => void;
-  onSave: (updatedRecord: CsvPermitRecord) => void;
+  onSave: (updatedRecord: CsvPermitRecord) => void | Promise<any>;
   resolvedVoucherCode?: string;
   onChangeFormData?: (updates: any) => void;
 }
@@ -47,6 +47,7 @@ export function EditRecordModal({
   const [formReplacementCode, setFormReplacementCode] = useState("");
   const [formStatus, setFormStatus] = useState("PENDING");
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   // Resolve any real code found directly on record itself,
   // ignoring placeholder/display values like "-" or "CANCELLED".
@@ -481,7 +482,14 @@ export function EditRecordModal({
       emailTemplate: hasReplacement ? "replacement" : (record.emailTemplate === "replacement" ? "new" : record.emailTemplate)
     };
 
-    onSave(updatedRecord);
+    setIsSaving(true);
+    Promise.resolve(onSave(updatedRecord))
+      .catch((err: any) => {
+        setValidationError(err?.message || "Failed to save record changes.");
+      })
+      .finally(() => {
+        setIsSaving(false);
+      });
   };
 
   const formIdDisplay = record.formId !== undefined && record.formId !== null && record.formId !== ""
@@ -740,10 +748,20 @@ export function EditRecordModal({
             </button>
             <button
               type="submit"
-              className="px-5 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm flex items-center gap-1.5 transition-colors cursor-pointer"
+              disabled={isSaving}
+              className="px-5 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg shadow-sm flex items-center gap-1.5 transition-colors cursor-pointer"
             >
-              <Check className="w-4 h-4" />
-              <span>Save Changes</span>
+              {isSaving ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <span>Saving...</span>
+                </>
+              ) : (
+                <>
+                  <Check className="w-4 h-4" />
+                  <span>Save Changes</span>
+                </>
+              )}
             </button>
           </div>
         </form>

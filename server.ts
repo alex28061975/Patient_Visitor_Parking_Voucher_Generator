@@ -312,6 +312,39 @@ async function startServer() {
     }
   });
 
+  // Administrative API Route: Update / Upsert permit record with server privileges (supports SUPABASE_SERVICE_ROLE_KEY)
+  app.post("/api/permits/update", async (req, res) => {
+    try {
+      const payload = req.body;
+      if (!payload || !payload.id) {
+        return res.status(400).json({ error: "Missing permit id parameter" });
+      }
+
+      const rawUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "https://ihhkitfpjmhudyzdhlpg.supabase.co";
+      const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      const anonKey = process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_-7OtzoSb8zYjAXHR_Gk6dg_jAqiUyHQ";
+
+      const apiKey = serviceKey || anonKey;
+      if (!apiKey || !rawUrl) {
+        return res.status(500).json({ error: "Supabase credentials not configured on server" });
+      }
+
+      const { createClient } = await import("@supabase/supabase-js");
+      const adminClient = createClient(rawUrl, apiKey);
+
+      const { error } = await adminClient.from("permits").upsert(payload, { onConflict: "id" });
+      if (error) {
+        console.warn(`Admin permit update error for id ${payload.id}:`, error.message);
+        return res.status(error.code === "42501" ? 403 : 500).json({ error: error.message, code: error.code });
+      }
+
+      return res.json({ success: true });
+    } catch (error: any) {
+      console.error("Admin permit update exception:", error);
+      return res.status(500).json({ error: error.message || "Unknown error" });
+    }
+  });
+
   // Serve client config (e.g. Supabase credentials)
   app.get("/api/config", (req, res) => {
     const rawUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";

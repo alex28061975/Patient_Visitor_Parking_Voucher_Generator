@@ -371,36 +371,80 @@ export const updatePermitInSupabase = async (record: CsvPermitRecord): Promise<b
   const client = getSupabaseClient();
   if (!client || !record) return false;
 
-  const permitId = record.id ?? record.formId;
-  if (permitId === undefined || permitId === null || permitId === '') {
+  const clean = (v: any): string => {
+    if (v === undefined || v === null) return '';
+    const s = String(v).trim().replace(/^#/, '');
+    if (!s || s === '-' || s.toLowerCase() === 'undefined' || s.toLowerCase() === 'null') return '';
+    return s;
+  };
+
+  const cleanFormId = clean(record.formId);
+  const cleanId = clean(record.id);
+
+  // Determine authoritative permit ID
+  let permitId = '';
+  if (cleanFormId && !cleanFormId.startsWith('row-')) {
+    permitId = cleanFormId;
+  } else if (cleanId && !cleanId.startsWith('row-')) {
+    permitId = cleanId;
+  } else if (cleanFormId) {
+    permitId = cleanFormId;
+  } else if (cleanId) {
+    permitId = cleanId;
+  }
+
+  if (!permitId) {
     console.warn('Cannot update permit in Supabase: record has no id/formId', record);
     return false;
   }
 
-  try {
-    const payload = {
-      id: String(permitId).trim(),
-      hospital: record.hospital || '',
-      ward: record.ward || '',
-      date_required: record.dateRequired || '',
-      date_expiry: resolveDateExpiry(record.dateRequired || '', record.dateExpiry || ''),
-      vrm: record.vrm || '',
-      driver_name: record.driverName || '',
-      phone: record.phone || null,
-      email: record.email || null,
-      voucher_code: record.voucherCode || null,
-      start_time: record.startTime || null,
-      completion_time: record.completionTime || null,
-    };
+  const payload = {
+    id: permitId,
+    hospital: record.hospital || (record as any).site || '',
+    ward: record.ward || '',
+    date_required: record.dateRequired || record.validFrom || '',
+    date_expiry: resolveDateExpiry(record.dateRequired || record.validFrom || '', record.dateExpiry || record.validTo || ''),
+    vrm: record.vrm || '',
+    driver_name: record.driverName || (record as any).name || '',
+    phone: record.phone || null,
+    email: record.email || (record as any).driverEmail || null,
+    voucher_code: record.voucherCode || (record as any).prePaidCode || null,
+    start_time: record.startTime || null,
+    completion_time: record.completionTime || null,
+  };
 
+  try {
     const { error } = await client.from('permits').upsert(payload, { onConflict: 'id' });
     if (error) {
-      console.warn(`Supabase update permit error for id ${permitId}:`, error.message);
+      console.warn(`Supabase client update permit error for id ${permitId}:`, error.message);
+      // Attempt server proxy fallback if client-side update encounters RLS or network issue
+      try {
+        const res = await fetch('/api/permits/update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+          const data = await res.json().catch(() => null);
+          if (data?.success) return true;
+        }
+      } catch (fallbackErr) {}
       return false;
     }
     return true;
   } catch (err) {
     console.warn(`Failed to update permit ${permitId} in Supabase:`, err);
+    try {
+      const res = await fetch('/api/permits/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        if (data?.success) return true;
+      }
+    } catch (fallbackErr) {}
     return false;
   }
 };

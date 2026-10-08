@@ -415,19 +415,44 @@ export function isPlaceholderVrm(vrm?: string | null): boolean {
 }
 
 /**
+ * Extracts a normalized, canonical permit key from id or formId, stripping '#' prefixes
+ */
+export function getNormalizedPermitKey(record: any): string {
+  if (!record) return "";
+  const clean = (v: any): string => {
+    if (v === undefined || v === null) return "";
+    const s = String(v).trim().replace(/^#/, "");
+    if (!s || s === "-" || s.toLowerCase() === "undefined" || s.toLowerCase() === "null") return "";
+    return s;
+  };
+  const formId = clean(record.formId);
+  const id = clean(record.id);
+  if (formId && !formId.startsWith("row-")) return formId;
+  if (id && !id.startsWith("row-")) return id;
+  return formId || id;
+}
+
+/**
  * Checks if two permit records or record-like objects match by Form ID, ID, or VRM + Date
  */
 export function isRecordMatch(r1?: any, r2?: any): boolean {
   if (!r1 || !r2) return false;
   if (r1 === r2) return true;
 
-  const id1 = String(r1.id ?? "").trim();
-  const formId1 = String(r1.formId ?? "").trim();
-  const id2 = String(r2.id ?? "").trim();
-  const formId2 = String(r2.formId ?? "").trim();
+  const clean = (v: any): string => {
+    if (v === undefined || v === null) return "";
+    const s = String(v).trim().replace(/^#/, "");
+    if (!s || s === "-" || s.toLowerCase() === "undefined" || s.toLowerCase() === "null") return "";
+    return s;
+  };
 
-  const hasId1 = Boolean((id1 && id1 !== "-" && id1 !== "undefined" && id1 !== "null") || (formId1 && formId1 !== "-" && formId1 !== "undefined" && formId1 !== "null"));
-  const hasId2 = Boolean((id2 && id2 !== "-" && id2 !== "undefined" && id2 !== "null") || (formId2 && formId2 !== "-" && formId2 !== "undefined" && formId2 !== "null"));
+  const id1 = clean(r1.id);
+  const formId1 = clean(r1.formId);
+  const id2 = clean(r2.id);
+  const formId2 = clean(r2.formId);
+
+  const hasId1 = Boolean(id1 || formId1);
+  const hasId2 = Boolean(id2 || formId2);
 
   // If BOTH records have an ID or Form ID, they MUST match on ID.
   // If their IDs do not match, they are definitely DIFFERENT records.
