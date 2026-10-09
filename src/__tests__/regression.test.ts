@@ -7,6 +7,7 @@ import {
   isRecordCancelledCanonical,
   isPermitExpiredBackdate,
   isVoucherExactPeriodEligible,
+  isDateRequiredOutsideValidWindow,
   parseDateToISO,
   addDaysSafe,
   CsvPermitRecord,
@@ -310,6 +311,46 @@ describe('ParkPass Concessions Regression Test Suite', () => {
     });
     assert.match(email.subject, /Cancelled: Concession Permit – FU26TUE/);
     assert.match(email.plainText, /is in the future/i);
+  });
+
+  // =========================================================================
+  // TEST 6b — Future start date window up to MAX_DAYS_AHEAD (2 days ahead)
+  // Acceptance tests for submission on 08/10/2026:
+  // - Start 09/10/2026 (1 day ahead): Valid / not outside valid window
+  // - Start 10/10/2026 (2 days ahead): Valid / not outside valid window
+  // - Start 11/10/2026 (3 days ahead): Outside valid window (beyond limit)
+  // - Start 12/10/2026 (4 days ahead): Outside valid window (beyond limit)
+  // =========================================================================
+  it('TEST 6b: Concessions up to 2 days ahead are within valid window; 3+ days ahead are outside window', () => {
+    const submissionDate = '08/10/2026';
+
+    // 1 day ahead (09/10/2026): within window (not outside)
+    assert.equal(
+      isDateRequiredOutsideValidWindow('09/10/2026', submissionDate),
+      false,
+      'Start 09/10/2026 (1 day ahead) must be within valid window'
+    );
+
+    // 2 days ahead (10/10/2026): within window (not outside)
+    assert.equal(
+      isDateRequiredOutsideValidWindow('10/10/2026', submissionDate),
+      false,
+      'Start 10/10/2026 (2 days ahead) must be within valid window'
+    );
+
+    // 3 days ahead (11/10/2026): outside valid window (cancelled / beyond limit)
+    assert.equal(
+      isDateRequiredOutsideValidWindow('11/10/2026', submissionDate),
+      true,
+      'Start 11/10/2026 (3 days ahead) must be outside valid window'
+    );
+
+    // 4 days ahead (12/10/2026): outside valid window (cancelled / beyond limit)
+    assert.equal(
+      isDateRequiredOutsideValidWindow('12/10/2026', submissionDate),
+      true,
+      'Start 12/10/2026 (4 days ahead) must be outside valid window'
+    );
   });
 
   // =========================================================================

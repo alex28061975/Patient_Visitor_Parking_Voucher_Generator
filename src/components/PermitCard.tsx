@@ -13,6 +13,7 @@ import {
   getUnusedVouchersForDate, 
   getSpreadsheetMatchingAssignedCodes, 
   isDateRequiredOutsideValidWindow, 
+  MAX_DAYS_AHEAD,
   checkIsBlockedDuplicate, 
   isRecordStrictlyEarlier, 
   extractRecordSubmissionTimeMs, 
@@ -2403,7 +2404,7 @@ function PermitCardInner({
                   {cancellationDetails.reason === 'duplicate'
                     ? "Duplicate Permit Request (Active Permit Found)"
                     : isCancelledInFuture
-                      ? "Date Mismatch (≥ 2 days in future)"
+                      ? `Date Mismatch (≥ ${MAX_DAYS_AHEAD + 1} days in future)`
                       : `Validity period ended (${data.validTo ? formatDate(data.validTo) : (data.validFrom ? formatDate(addDays(data.validFrom, 6)) : "[Date Expiry]")})`}
                 </span>
               </div>

@@ -1501,6 +1501,8 @@ export function getTodayISO(): string {
   return `${year}-${month}-${day}`;
 }
 
+export const MAX_DAYS_AHEAD = 2;
+
 export function isDateRequiredOutsideValidWindow(dateRequiredStr?: string, referenceDateStr?: string): boolean {
   if (!dateRequiredStr) return false;
   const iso = parseDateToISO(String(dateRequiredStr));
@@ -1521,7 +1523,7 @@ export function isDateRequiredOutsideValidWindow(dateRequiredStr?: string, refer
 
   const daysDiff = Math.floor((parkingDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
   // A permit is 7 days (day 0 to day 6). By day 7 (e.g. 19/09 for 12/09), daysDiff is <= -7, meaning it has expired.
-  return daysDiff <= -7 || daysDiff > 1;
+  return daysDiff <= -7 || daysDiff > MAX_DAYS_AHEAD;
 }
 
 /**
