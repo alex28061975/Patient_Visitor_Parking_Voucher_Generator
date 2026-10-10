@@ -1335,4 +1335,65 @@ CON_ERR_2,,`;
     assert.equal(permitsToPush.length, 0, 'Zero stale permits pushed to cloud on reconnect');
   });
 
+  // =========================================================================
+  // TEST 26 — Rizwan Akbar regression (#2113)
+  // Request submitted on 09/10/2026 for 23/07/2026 - 29/07/2026
+  // Expected: Expired cancellation reason with "The 7-day validity period for this concession has ended"
+  // Must NOT claim an active permit exists valid through 29/07/2026
+  // =========================================================================
+  it('TEST 26: Rizwan Akbar regression (#2113) - Concession requested 7+ days in past resolves to expired email even if matching permit exists', () => {
+    const historicalPermit: CsvPermitRecord = {
+      id: '1500',
+      formId: '1500',
+      startTime: '23/07/2026 10:00:00',
+      completionTime: '23/07/2026 10:00:00',
+      vrm: 'LO67YNH',
+      driverName: 'Rizwan Akbar',
+      validFrom: '23/07/2026',
+      validTo: '29/07/2026',
+      dateRequired: '23/07/2026',
+      hospital: 'Newham Hospital',
+      ward: 'Larch Ward',
+      status: 'SENT',
+      isDispatched: true,
+      voucherCode: 'OLD_JULY_VOUCHER'
+    };
+
+    const backdatedPermit: CsvPermitRecord = {
+      id: '2113',
+      formId: '2113',
+      startTime: '09/10/2026 11:02:44',
+      completionTime: '09/10/2026 11:02:44',
+      vrm: 'LO67YNH',
+      driverName: 'Rizwan Akbar',
+      validFrom: '23/07/2026',
+      validTo: '29/07/2026',
+      dateRequired: '23/07/2026',
+      hospital: 'Newham Hospital',
+      ward: 'Larch Ward',
+      status: 'CANCELLED',
+      cancellationReason: 'EXPIRED'
+    };
+
+    const details = resolveCancellationDetails(backdatedPermit, [historicalPermit], '09/10/2026');
+    assert.equal(details.reason, 'expired', 'Must resolve to expired, NOT duplicate');
+    assert.equal(details.currentExpiryDate, '', 'Must not set currentExpiryDate for expired concession');
+    assert.equal(details.earliestRenewalDate, '', 'Must not set earliestRenewalDate for expired concession');
+
+    const email = getCancellationEmailContent({
+      vrm: backdatedPermit.vrm,
+      driverName: backdatedPermit.driverName,
+      validFrom: backdatedPermit.validFrom,
+      validTo: backdatedPermit.validTo,
+      todayDate: '09/10/2026',
+      reason: details.reason,
+      cancellationReason: backdatedPermit.cancellationReason,
+      currentExpiryDate: details.currentExpiryDate,
+      earliestRenewalDate: details.earliestRenewalDate
+    });
+
+    assert.match(email.plainText, /The 7-day validity period for this concession has ended, so your request has been cancelled\./);
+    assert.doesNotMatch(email.plainText, /already has an active permit valid through/);
+  });
+
 });

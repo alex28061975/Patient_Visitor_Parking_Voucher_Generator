@@ -174,7 +174,7 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
           ...entry.record,
           isCancelled: true,
           status: "CANCELLED",
-          cancellationReason: entry.record.cancellationReason || "MANUAL",
+          cancellationReason: entry.record.cancellationReason || (isPermitExpiredBackdate(entry.record) ? "EXPIRED" : "MANUAL"),
           voucherCode: "CANCELLED",
           prePaidCode: "CANCELLED",
           originalVoucherCode: preservedVoucher || entry.record.originalVoucherCode
@@ -280,7 +280,7 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
           voucherCode: "CANCELLED",
           prePaidCode: "CANCELLED",
           originalVoucherCode: preservedVoucher || entry.record.originalVoucherCode,
-          cancellationReason: (entry.record.cancellationReason === "MANUAL" || entry.record.cancellationReason === "BLOCKLIST")
+          cancellationReason: (entry.record.cancellationReason === "MANUAL" || entry.record.cancellationReason === "BLOCKLIST" || entry.record.cancellationReason === "EXPIRED")
             ? entry.record.cancellationReason
             : "DUPLICATE_VRM"
         };
@@ -294,7 +294,7 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
           ...entry.record,
           isCancelled: true,
           status: "CANCELLED",
-          cancellationReason: entry.record.cancellationReason || "MANUAL",
+          cancellationReason: entry.record.cancellationReason || (isPermitExpiredBackdate(entry.record) ? "EXPIRED" : "MANUAL"),
           voucherCode: "CANCELLED",
           prePaidCode: "CANCELLED",
           originalVoucherCode: preservedVoucher || entry.record.originalVoucherCode
@@ -381,8 +381,8 @@ export function enrichRecordsWithVouchers(
       const isExpired7Days = Boolean(fallbackDateStr && reqIso && Math.floor((new Date(reqIso + "T00:00:00").getTime() - new Date(parseDateToISO(fallbackDateStr) + "T00:00:00").getTime()) / 86400000) <= -7);
       const determinedReason = record.cancellationReason ||
         (isVrmSilentBlockedSync(record.vrm) ? "BLOCKLIST" :
-        checkIsBlockedDuplicate(record, recordsList, recDateISO || fallbackDateStr) ? "DUPLICATE_VRM" :
         (isBackdate || isExpired7Days) ? "EXPIRED" :
+        checkIsBlockedDuplicate(record, recordsList, recDateISO || fallbackDateStr) ? "DUPLICATE_VRM" :
         "MANUAL");
 
       return {
@@ -569,8 +569,8 @@ export function enrichRecordsWithVouchers(
       const isExpired7Days = Boolean(fallbackDateStr && reqIso && Math.floor((new Date(reqIso + "T00:00:00").getTime() - new Date(parseDateToISO(fallbackDateStr) + "T00:00:00").getTime()) / 86400000) <= -7);
       const determinedReason = record.cancellationReason ||
         (isVrmSilentBlockedSync(record.vrm) ? "BLOCKLIST" :
-        checkIsBlockedDuplicate(record, recordsList, reqDateD || fallbackDateStr) ? "DUPLICATE_VRM" :
         (isBackdate || isExpired7Days) ? "EXPIRED" :
+        checkIsBlockedDuplicate(record, recordsList, reqDateD || fallbackDateStr) ? "DUPLICATE_VRM" :
         "MANUAL");
 
       enrichedByIndex.set(index, {
