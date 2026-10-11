@@ -22,7 +22,8 @@ import {
   isRecordCancelled,
   getRequestedPermitDateISO,
   getVoucherDateISO,
-  isVoucherInValidityPeriod
+  isVoucherInValidityPeriod,
+  cleanVoucherCodeValue
 } from "../utils/csvParser";
 import { getRecordKeys, checkIsRecordDispatched, getRecordPrimaryKey } from "../utils/dispatchUtils";
 import { 
@@ -63,8 +64,8 @@ import {
 } from "lucide-react";
 
 export interface PermitCardHandle {
-  send: (record?: CsvPermitRecord, options?: { skipDispatch?: boolean }) => Promise<boolean | void>;
-  sendOne: (record?: CsvPermitRecord, options?: { skipDispatch?: boolean }) => Promise<boolean | void>;
+  send: (record?: CsvPermitRecord, options?: { skipDispatch?: boolean; isReplacement?: boolean }) => Promise<boolean | void>;
+  sendOne: (record?: CsvPermitRecord, options?: { skipDispatch?: boolean; isReplacement?: boolean }) => Promise<boolean | void>;
   bulkEmail: (records?: CsvPermitRecord[]) => Promise<boolean | void>;
   unsend: (record?: CsvPermitRecord) => Promise<boolean | void>;
   print: () => void;
@@ -513,23 +514,35 @@ function PermitCardInner({
       prevRecordIdentityRef.current = currentIdentity;
       prevVoucherCodeRef.current = data.voucherCodesText;
       
-      const isPending = !isCurrentDispatched || data.status === "Pending" || !data.isDispatched;
-      if (isPending) {
-        setEmailTemplate("new");
-        if (data.isResend || data.emailType === "RESEND_CONCESSION" || data.emailTemplate === "replacement") {
-          onChange?.({
-            isResend: false,
-            emailType: "SEND_CONCESSION",
-            emailTemplate: "new"
-          });
-        }
+      const hasReplacementFlags = Boolean(
+        data.replacementCode ||
+        data.isResend ||
+        data.emailType === "RESEND_CONCESSION" ||
+        data.emailTemplate === "replacement" ||
+        (data.originalVoucherCode && data.voucherCodesText && cleanVoucherCodeValue(data.voucherCodesText) !== cleanVoucherCodeValue(data.originalVoucherCode))
+      );
+
+      if (hasReplacementFlags) {
+        setEmailTemplate("replacement");
       } else {
-        if (data.emailTemplate) {
-          setEmailTemplate(data.emailTemplate);
-        } else if (data.emailType === "RESEND_CONCESSION" || data.isResend) {
-          setEmailTemplate("replacement");
+        const isPending = !isCurrentDispatched || data.status === "Pending" || !data.isDispatched;
+        if (isPending) {
+          setEmailTemplate("new");
+          if (data.isResend || data.emailType === "RESEND_CONCESSION" || data.emailTemplate === "replacement") {
+            onChange?.({
+              isResend: false,
+              emailType: "SEND_CONCESSION",
+              emailTemplate: "new"
+            });
+          }
         } else {
-          setEmailTemplate("replacement");
+          if (data.emailTemplate) {
+            setEmailTemplate(data.emailTemplate);
+          } else if (data.emailType === "RESEND_CONCESSION" || data.isResend) {
+            setEmailTemplate("replacement");
+          } else {
+            setEmailTemplate("replacement");
+          }
         }
       }
       return;
@@ -638,19 +651,28 @@ function PermitCardInner({
 
   const isReplacement = useMemo(() => {
     // 0. Explicit resend / replacement markers on form data
-    if (data.emailType === "RESEND_CONCESSION" || data.isResend || data.emailTemplate === "replacement") return true;
+    if (
+      Boolean(data.replacementCode) ||
+      data.emailType === "RESEND_CONCESSION" ||
+      data.isResend ||
+      data.emailTemplate === "replacement"
+    ) return true;
     // 1. If the template was explicitly set/selected to replacement
     if (emailTemplate === "replacement") return true;
     // 2. If voucher code has been updated or changed on an existing/dispatched record
     if (isCurrentDispatched && isVoucherChangedOnSent) return true;
-    // 3. If any voucher code modification happened on an existing dispatched entry
+    // 3. If original voucher code exists and differs from current code
+    if (originalVoucherCode && currentSelectedCode && cleanVoucherCodeValue(currentSelectedCode) !== cleanVoucherCodeValue(originalVoucherCode)) {
+      return true;
+    }
+    // 4. If any voucher code modification happened on an existing dispatched entry
     if (isCurrentDispatched && currentSelectedCode && currentSelectedCode !== "-" && currentSelectedCode !== "CANCELLED") {
       const dispatchedCode = (lastDispatchedCodeMap[recordKeyStr] ?? "").trim().toUpperCase();
       if (dispatchedCode && currentSelectedCode !== dispatchedCode) {
         return true;
       }
     }
-    // 4. If a PREVIOUSLY DISPATCHED record had an assigned code in the database
+    // 5. If a PREVIOUSLY DISPATCHED record had an assigned code in the database
     // and the current code differs, that's a genuine replacement. Gated by
     // isCurrentDispatched like checks #2/#3 above - without that gate, this
     // would also fire on a never-sent record purely because the database's
@@ -663,7 +685,7 @@ function PermitCardInner({
       return true;
     }
     return false;
-  }, [data.emailType, data.isResend, data.emailTemplate, emailTemplate, isCurrentDispatched, isVoucherChangedOnSent, currentSelectedCode, lastDispatchedCodeMap, recordKeyStr, activeIndex, matchingPermits, database, data.formId]);
+  }, [data.replacementCode, data.emailType, data.isResend, data.emailTemplate, emailTemplate, isCurrentDispatched, isVoucherChangedOnSent, originalVoucherCode, currentSelectedCode, lastDispatchedCodeMap, recordKeyStr, activeIndex, matchingPermits, database, data.formId]);
 
   const getEmailContent = useCallback((template: "new" | "replacement") => {
     const hasUpdatedVoucherCode = isCurrentDispatched && isVoucherChangedOnSent;
@@ -760,11 +782,12 @@ function PermitCardInner({
       return;
     }
 
-    if (!qrUrl && qrPayload) {
-      await generateQrUrls(qrPayload);
+    const effectiveResendPayload = (data.qrOverride || "").trim() || data.replacementCode || currentSelectedCode || activeVoucherCode || qrPayload || "";
+    if (effectiveResendPayload && (!qrUrl || qrCodeChanged || isReplacement)) {
+      await generateQrUrls(effectiveResendPayload);
     }
 
-    if (!qrUrl) {
+    if (!qrUrl && !effectiveResendPayload) {
       rejectQrBlob?.(new Error("No QR code available"));
       showToast("⚠️ Cannot resend email: No QR code is available for this permit. Please assign a valid voucher code.");
       return;
@@ -780,7 +803,7 @@ function PermitCardInner({
           vrm: data.vrm,
           driverName: data.name,
           email: recipientEmail,
-          requestedCode: currentSelectedCode,
+          requestedCode: currentSelectedCode || effectiveResendPayload,
           validFrom: data.validFrom,
           validTo: data.validTo,
           todayDate: data.todayDate
@@ -794,14 +817,16 @@ function PermitCardInner({
       console.warn("Could not register tracking pixel with backend:", e);
     }
 
+    const recValidFrom = data.validFrom || data.dateRequired || resendTargetRecord.validFrom || resendTargetRecord.dateRequired || "";
+    const recValidTo = data.validTo || resendTargetRecord.validTo || (recValidFrom ? addDays(recValidFrom, 6) : "") || "";
     const params = {
       vrm: data.vrm,
       driverName: data.name,
       duration: "7 days",
-      validFrom: data.validFrom,
-      validTo: data.validTo,
-      todayDate: data.todayDate,
-      dateRequired: data.dateRequired,
+      validFrom: recValidFrom,
+      validTo: recValidTo,
+      todayDate: data.todayDate || resendTargetRecord.todayDate || getTodayISO(),
+      dateRequired: data.dateRequired || resendTargetRecord.dateRequired || recValidFrom,
       trackingPixelUrl
     };
     const content = getReplacementEmailContent(params);
@@ -867,7 +892,7 @@ function PermitCardInner({
     // Generate QR code data URL on demand if not cancelled
     let activeQrDataUrl = qrUrlSmall || qrUrl;
     if (!isCancelled) {
-      const payload = (data.qrOverride || "").trim() || activeVoucherCode || currentSelectedCode || "";
+      const payload = (data.qrOverride || "").trim() || data.replacementCode || currentSelectedCode || activeVoucherCode || "";
       if (payload && payload !== "-" && payload !== "CANCELLED") {
         try {
           activeQrDataUrl = await QRCode.toDataURL(payload, {
@@ -952,7 +977,7 @@ function PermitCardInner({
     return true;
   };
 
-  const handleSendClick = async (targetRecordArg?: CsvPermitRecord | any, options?: { skipDispatch?: boolean }) => {
+  const handleSendClick = async (targetRecordArg?: CsvPermitRecord | any, options?: { skipDispatch?: boolean; isReplacement?: boolean }) => {
     const isRealRecord = (r: any): r is CsvPermitRecord => {
       return Boolean(r && typeof r === 'object' && !('nativeEvent' in r) && !('isTrusted' in r) && !('preventDefault' in r) && (r.vrm || r.formId || r.id || r.driverName || r.email));
     };
@@ -1013,7 +1038,7 @@ function PermitCardInner({
     );
     const vrm = rec?.vrm || data.vrm || "";
 
-    if (!isCancelledRec && !targetRecord && qrCodeChanged) {
+    if (!isCancelledRec && !targetRecord && (qrCodeChanged || isReplacement || emailTemplate === "replacement")) {
       const res = await handleResendConcessionEmail();
       if (res === false) {
         showToast("❌ Failed to send. Please try again.");
@@ -1042,7 +1067,6 @@ function PermitCardInner({
       showToast(`⚠️ Cannot send email: No QR code is available for this permit. Please assign a valid voucher code.`);
       return;
     }
-    
     const result = await handleSendWithOutlook(targetRecord, options);
     if (result !== false) {
       const targetPayloadCode = rec?.voucherCode || rec?.prePaidCode || (!targetRecord ? currentSelectedCode : "");
@@ -1141,9 +1165,9 @@ function PermitCardInner({
         return code;
       }
     }
-    const raw = data.voucherCode || data.prePaidCode || data.qrCode || data.serialNumber;
+    const raw = data.replacementCode || data.voucherCodesText || data.voucherCode || data.prePaidCode || data.qrCode || data.serialNumber;
     if (raw && raw !== "-" && raw.toUpperCase() !== "CANCELLED") {
-      return raw;
+      return raw.trim().toUpperCase();
     }
     if (data.formId) {
       const matched = database?.find(r => (r.formId === data.formId || r.id === data.formId));
@@ -1199,11 +1223,14 @@ function PermitCardInner({
     if ((data.qrOverride || "").trim()) {
       return (data.qrOverride || "").trim();
     }
+    if (data.replacementCode && data.replacementCode !== "-" && data.replacementCode.toUpperCase() !== "CANCELLED") {
+      return data.replacementCode.trim().toUpperCase();
+    }
     if (activeVoucherCode && activeVoucherCode !== "-") {
       return activeVoucherCode;
     }
     return "";
-  }, [data.qrOverride, activeVoucherCode]);
+  }, [data.qrOverride, data.replacementCode, activeVoucherCode]);
 
   const generateQrUrls = useCallback(async (payload: string): Promise<{ highRes: string; small: string }> => {
     if (!payload || payload === "-" || payload === "CANCELLED") {
@@ -1964,7 +1991,7 @@ function PermitCardInner({
   // - Red text for non-refundable
   // - Blue clickable email link
   // ============================================
-  const handleSendWithOutlook = async (targetRecordArg?: CsvPermitRecord | any, options?: { skipDispatch?: boolean }) => {
+  const handleSendWithOutlook = async (targetRecordArg?: CsvPermitRecord | any, options?: { skipDispatch?: boolean; isReplacement?: boolean }) => {
     // Sanitize targetRecord: ensure it's not a React SyntheticEvent or other non-record object
     const isRealRecord = (r: any): r is CsvPermitRecord => {
       return Boolean(r && typeof r === 'object' && !('nativeEvent' in r) && !('isTrusted' in r) && !('preventDefault' in r) && (r.vrm || r.formId || r.id || r.driverName || r.email));
@@ -2000,8 +2027,12 @@ function PermitCardInner({
     const targetEmail = (targetRec.email || targetRec.driverEmail || (targetRecord ? "" : data.email) || "").toLowerCase().trim();
     const targetWard = (targetRec.ward || (targetRecord ? "" : data.ward) || "").trim();
     const targetSite = (targetRec.site || targetRec.hospital || (targetRecord ? "" : data.site) || "").trim();
-    const targetValidFrom = targetRec.validFrom || targetRec.dateRequired || (targetRecord ? "" : data.validFrom) || "";
-    const targetValidTo = targetRec.validTo || (targetValidFrom ? addDays(targetValidFrom, 6) : "") || (targetRecord ? "" : data.validTo) || "";
+    const targetValidFrom = (!targetRecord
+      ? (data.validFrom || data.dateRequired || targetRec.validFrom || targetRec.dateRequired || "")
+      : (targetRec.validFrom || targetRec.dateRequired || "")) || "";
+    const targetValidTo = (!targetRecord
+      ? (data.validTo || targetRec.validTo || (targetValidFrom ? addDays(targetValidFrom, 6) : ""))
+      : (targetRec.validTo || (targetValidFrom ? addDays(targetValidFrom, 6) : ""))) || "";
     const targetTodayDate = targetRec.todayDate || (targetRecord ? "" : data.todayDate) || getTodayISO();
     if (!targetRec.todayDate) {
       targetRec.todayDate = targetTodayDate;
@@ -2032,7 +2063,10 @@ function PermitCardInner({
       (typeof targetRec.prePaidCode === 'string' && targetRec.prePaidCode.toUpperCase() === 'CANCELLED') ||
       (!targetRecord && isCancelled)
     );
-    const targetPayloadCode = targetRec.replacementCode || targetRec.voucherCode || targetRec.prePaidCode || targetRec.voucherCodesText || (!targetRecord ? (data.qrOverride?.trim() || activeVoucherCode || currentSelectedCode || "") : "");
+    const targetPayloadCode = (!targetRecord
+      ? ((data.qrOverride || "").trim() || data.replacementCode || currentSelectedCode || activeVoucherCode || targetRec.replacementCode || targetRec.voucherCode || targetRec.voucherCodesText || targetRec.prePaidCode || "")
+      : (targetRec.replacementCode || targetRec.voucherCode || targetRec.voucherCodesText || targetRec.prePaidCode || "")
+    ).trim().toUpperCase();
 
     // 2. Kick off clipboard write ONLY if permit is NOT cancelled!
     // If cancelled, skip navigator.clipboard.write() call completely and clear clipboard text
@@ -2107,10 +2141,13 @@ function PermitCardInner({
       htmlText = cancelContent.htmlText;
     } else {
       const isTargetReplacement = Boolean(
+        options?.isReplacement ||
         targetRec.replacementCode ||
         targetRec.emailType === "RESEND_CONCESSION" ||
         targetRec.isResend ||
         targetRec.emailTemplate === "replacement" ||
+        (targetRec.originalVoucherCode && targetPayloadCode && cleanVoucherCodeValue(targetPayloadCode) !== cleanVoucherCodeValue(targetRec.originalVoucherCode)) ||
+        (targetRecord && (targetRecord.isDispatched || targetRecord.status === "SENT")) ||
         (!targetRecord && isReplacement)
       );
       const effectiveTemplate = isTargetReplacement ? "replacement" : emailTemplate;
@@ -2258,7 +2295,7 @@ function PermitCardInner({
     return true;
   };
 
-  const sendOne = async (record?: CsvPermitRecord, options?: { skipDispatch?: boolean }) => {
+  const sendOne = async (record?: CsvPermitRecord, options?: { skipDispatch?: boolean; isReplacement?: boolean }) => {
     if (record) {
       onSelectRecord?.(record);
       await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
@@ -2679,7 +2716,7 @@ function PermitCardInner({
                 onClick={() => {
                   if (isCancelled) {
                     handleSendClick();
-                  } else if (qrCodeChanged) {
+                  } else if (qrCodeChanged || isReplacement || emailTemplate === "replacement") {
                     handleResendConcessionEmail();
                   } else {
                     handleSendClick();
@@ -2703,7 +2740,7 @@ function PermitCardInner({
                 <span>
                   {isCancelled
                     ? "Send Cancellation Notice" 
-                    : qrCodeChanged 
+                    : (qrCodeChanged || isReplacement || emailTemplate === "replacement")
                       ? "Resend Concession Email" 
                       : "Send Concession Email"}
                 </span>

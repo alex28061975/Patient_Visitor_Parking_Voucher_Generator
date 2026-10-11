@@ -2907,7 +2907,7 @@ export default function App() {
     // 6. Mark dispatched
     await markAsDispatched(record.vrm, record.email, updatedRecord);
 
-    // 7. Update formData to clear replacement flags
+    // 7. Update formData with resent state
     setFormData(prev => ({
       ...prev,
       id: updatedRecord.id,
@@ -2915,16 +2915,16 @@ export default function App() {
       vrm: updatedRecord.vrm,
       voucherCodesText: newVoucherCode,
       replacementCode: undefined,
-      isResend: false,
-      emailType: "SEND_CONCESSION",
-      emailTemplate: "new",
+      isResend: true,
+      emailType: "RESEND_CONCESSION",
+      emailTemplate: "replacement",
       status: "SENT"
     }));
 
     // 8. Open email composer with the new code & tracking pixel (skip redundant dispatch)
     handleSelectRecord(updatedRecord);
     if (permitCardRef.current?.sendOne) {
-      await permitCardRef.current.sendOne(updatedRecord, { skipDispatch: true });
+      await permitCardRef.current.sendOne(updatedRecord, { skipDispatch: true, isReplacement: true });
     }
 
     showToast(`✅ Replacement permit resent with new code ${newVoucherCode}. Status updated to SENT.`, "success");

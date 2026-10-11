@@ -38,6 +38,7 @@ export interface PermitData {
   isDispatched?: boolean;
   dispatchedAt?: string;
   hasOriginalVoucher?: boolean;
+  originalVoucherCode?: string;
   processingDate?: string;
   submissionDate?: string;
   cancellationReason?: "DUPLICATE_VRM" | "BLOCKLIST" | "EXPIRED" | "MANUAL" | string;

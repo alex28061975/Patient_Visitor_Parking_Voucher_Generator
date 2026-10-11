@@ -311,20 +311,28 @@ export function deriveDateRangeForEmail(params: EmailTemplateParams): {
   const rawToIso = parseDateToISO(rawTo);
 
   let formattedFrom = "[Valid From]";
-  if (rawFrom) {
+  if (rawFrom && rawFrom !== "-" && rawFrom !== "—" && rawFrom !== "[Valid From]") {
     const f = formatDate(rawFrom);
     if (f && f !== "-") formattedFrom = f;
   }
 
-  let formattedExpiry = "[Valid Expiry]";
-  if (rawTo) {
+  let formattedExpiry = "";
+  if (rawTo && rawTo !== "-" && rawTo !== "—" && rawTo !== "[Valid Expiry]") {
     const f = formatDate(rawTo);
-    if (f && f !== "-") formattedExpiry = f;
-  } else if (rawFromIso) {
+    if (f && f !== "-") {
+      if (!rawFromIso || !rawToIso || rawToIso >= rawFromIso) {
+        formattedExpiry = f;
+      }
+    }
+  }
+  if (!formattedExpiry && rawFromIso) {
     const calculatedExpiryIso = addDays(rawFromIso, 6);
     if (calculatedExpiryIso) {
       formattedExpiry = formatDate(calculatedExpiryIso);
     }
+  }
+  if (!formattedExpiry) {
+    formattedExpiry = "[Valid Expiry]";
   }
 
   return {
@@ -344,8 +352,7 @@ export function getSendEmailContent(params: EmailTemplateParams): EmailContentRe
 
   const subject = `Your QR Code Credentials - ${vrm}`;
 
-  const plainText = `
-Dear ${driverName},
+  const plainText = `Dear ${driverName},
 
 Please find attached your concession QR code.
 
@@ -364,7 +371,6 @@ Barts Health NHS Trust
 Car Parking Services Team`;
 
   const htmlText = `<div style="font-family: Calibri, Arial, sans-serif; font-size: 11pt; color: #000000; line-height: 1.35;">
-<br/>
 Dear ${driverName},<br/><br/>
 Please find attached your concession QR code.<br/><br/>
 On your first day of parking, please take the QR code to the pay machine, press Concession, and enter vehicle registration number <strong>${vrm}</strong>.<br/><br/>
@@ -391,8 +397,7 @@ export function getReplacementEmailContent(params: EmailTemplateParams): EmailCo
 
   const subject = `Replacement Parking Concession – ${vrm}`;
 
-  const plainText = `
-Dear ${driverName},
+  const plainText = `Dear ${driverName},
 
 Please find attached your replacement concession QR code. We apologise for any inconvenience caused by the previous code.
 
@@ -417,7 +422,6 @@ Car Parking Services Team`;
     : "";
 
   const htmlText = `<div style="font-family: Calibri, Arial, sans-serif; font-size: 11pt; color: #000000; line-height: 1.35;">
-<br/>
 Dear ${driverName},<br/><br/>
 Please find attached your replacement concession QR code. We apologise for any inconvenience caused by the previous code.<br/><br/>
 Please use this replacement QR code instead of your previous QR code.<br/><br/>

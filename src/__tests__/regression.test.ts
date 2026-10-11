@@ -16,6 +16,8 @@ import {
 import {
   resolveCancellationDetails,
   getCancellationEmailContent,
+  getReplacementEmailContent,
+  deriveDateRangeForEmail,
   CancellationReason
 } from '../utils/emailTemplateUtils';
 import { getRecordPrimaryKey, getRecordKeys } from '../utils/dispatchUtils';
@@ -1396,4 +1398,42 @@ CON_ERR_2,,`;
     assert.doesNotMatch(email.plainText, /already has an active permit valid through/);
   });
 
+  // =========================================================================
+  // TEST 27 — Replacement QR code email template, subject, body, and dates
+  // Target: Replacement Parking Concession – {VRM}
+  // Body must match NHS replacement template, not first-send template, with
+  // correct dates from validFrom to validExpiry.
+  // =========================================================================
+  it('TEST 27: Replacement QR code email template produces expected subject, body, and dates', () => {
+    const dates = deriveDateRangeForEmail({
+      validFrom: '10/10/2026',
+      validTo: '',
+    });
+    assert.equal(dates.validFrom, '10/10/2026');
+    assert.equal(dates.validExpiry, '16/10/2026', 'Calculates validFrom + 6 days for 7-day concession');
+
+    const email = getReplacementEmailContent({
+      vrm: 'AB12CDE',
+      driverName: 'Jane Doe',
+      validFrom: '10/10/2026',
+      validTo: '16/10/2026',
+      duration: '7 days',
+    });
+
+    assert.equal(email.subject, 'Replacement Parking Concession – AB12CDE');
+    assert.match(email.plainText, /^Dear Jane Doe,/);
+    assert.match(email.plainText, /Please find attached your replacement concession QR code\. We apologise for any inconvenience caused by the previous code\./);
+    assert.match(email.plainText, /Please use this replacement QR code instead of your previous QR code\./);
+    assert.match(email.plainText, /On your next visit, please take the replacement QR code to the pay machine, press Concession, and enter vehicle registration number AB12CDE\./);
+    assert.match(email.plainText, /The machine will then ask you to scan a blue badge or concession\. Please scan your replacement QR code at this point\./);
+    assert.match(email.plainText, /Your concession will allow you to park for 7 days, from 10\/10\/2026 to 16\/10\/2026\./);
+    assert.match(email.plainText, /Please note that concession payments are non-refundable\./);
+    assert.match(email.plainText, /If you continue to experience any issues or have any further queries, please contact: parkingadminbh\.bartshealth@nhs\.net/);
+    assert.match(email.plainText, /Kind regards,\nBarts Health NHS Trust\nCar Parking Services Team$/);
+
+    // Verify it does NOT contain first-send copy
+    assert.doesNotMatch(email.plainText, /On your first day of parking/);
+  });
+
 });
+
