@@ -17,6 +17,7 @@ import {
   resolveCancellationDetails,
   getCancellationEmailContent,
   getReplacementEmailContent,
+  getSendEmailContent,
   deriveDateRangeForEmail,
   CancellationReason
 } from '../utils/emailTemplateUtils';
@@ -1507,11 +1508,11 @@ CON_ERR_2,,`;
     });
 
     assert.equal(email.subject, 'Replacement Parking Concession – AB12CDE');
-    assert.match(email.plainText, /^Dear Jane Doe,/);
+    assert.match(email.plainText, /^\nDear Jane Doe,/);
     assert.match(email.plainText, /Please find attached your replacement concession QR code\. We apologise for any inconvenience caused by the previous code\./);
     assert.match(email.plainText, /Please use this replacement QR code instead of your previous QR code\./);
     assert.match(email.plainText, /On your next visit, please take the replacement QR code to the pay machine, press Concession, and enter vehicle registration number AB12CDE\./);
-    assert.match(email.plainText, /The machine will then ask you to scan a blue badge or concession\. Please scan your replacement QR code at this point\./);
+    assert.match(email.machine || email.plainText, /The machine will then ask you to scan a blue badge or concession\. Please scan your replacement QR code at this point\./);
     assert.match(email.plainText, /Your concession will allow you to park for 7 days, from 10\/10\/2026 to 16\/10\/2026\./);
     assert.match(email.plainText, /Please note that concession payments are non-refundable\./);
     assert.match(email.plainText, /If you continue to experience any issues or have any further queries, please contact: parkingadminbh\.bartshealth@nhs\.net/);
@@ -1519,6 +1520,35 @@ CON_ERR_2,,`;
 
     // Verify it does NOT contain first-send copy
     assert.doesNotMatch(email.plainText, /On your first day of parking/);
+  });
+
+  // =========================================================================
+  // TEST 28 — First-send QR code email template, subject, body, and dates
+  // Target: Your QR Code Credentials - {VRM}
+  // Body must match NHS first-send template with leading blank line.
+  // =========================================================================
+  it('TEST 28: First-send QR code email template produces expected subject, body, and dates', () => {
+    const email = getSendEmailContent({
+      vrm: 'AB12CDE',
+      driverName: 'Jane Doe',
+      validFrom: '10/10/2026',
+      validTo: '16/10/2026',
+      duration: '7 days',
+    });
+
+    assert.equal(email.subject, 'Your QR Code Credentials - AB12CDE');
+    assert.match(email.plainText, /^\nDear Jane Doe,/);
+    assert.match(email.plainText, /Please find attached your concession QR code\./);
+    assert.match(email.plainText, /On your first day of parking, please take the QR code to the pay machine, press Concession, and enter vehicle registration number AB12CDE\./);
+    assert.match(email.plainText, /The machine will then ask you to scan a blue badge or concession\. Please scan your QR code at this point\./);
+    assert.match(email.plainText, /Your concession will allow you to park for 7 days, from 10\/10\/2026 to 16\/10\/2026\./);
+    assert.match(email.plainText, /Please note that concession payments are non-refundable\./);
+    assert.match(email.plainText, /If you have any queries, please contact: parkingadminbh\.bartshealth@nhs\.net/);
+    assert.match(email.plainText, /Kind regards,\nBarts Health NHS Trust\nCar Parking Services Team$/);
+
+    // Verify it does NOT contain replacement copy
+    assert.doesNotMatch(email.plainText, /replacement concession QR code/);
+    assert.doesNotMatch(email.plainText, /On your next visit/);
   });
 
 });
