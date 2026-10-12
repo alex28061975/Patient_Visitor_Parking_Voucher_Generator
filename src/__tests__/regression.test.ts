@@ -356,6 +356,92 @@ describe('ParkPass Concessions Regression Test Suite', () => {
   });
 
   // =========================================================================
+  // TEST 6c — Future start date cancellation email template & reason resolution
+  // =========================================================================
+  it('TEST 6c: Future-date cancellation resolves reason and exact email text with 08/10/2026 submission', () => {
+    const submissionDate = '08/10/2026';
+
+    // 10/10/2026 (2 days ahead) is NOT cancelled as future
+    const withinWindowRec: CsvPermitRecord = {
+      id: '2010',
+      formId: '2010',
+      vrm: 'AB12CDE',
+      driverName: 'Test Driver',
+      validFrom: '10/10/2026',
+      dateRequired: '10/10/2026',
+      hospital: 'Whipps Cross Hospital',
+      ward: 'Maternity',
+      submissionDate
+    };
+    assert.equal(isDateRequiredOutsideValidWindow('10/10/2026', submissionDate), false);
+    const withinDetails = resolveCancellationDetails(withinWindowRec, [], submissionDate);
+    assert.notEqual(withinDetails.reason, 'future');
+
+    // 11/10/2026 (3 days ahead) resolves to 'future'
+    const futureRec11: CsvPermitRecord = {
+      id: '2011',
+      formId: '2011',
+      vrm: 'AB12CDE',
+      driverName: 'Test Driver',
+      validFrom: '11/10/2026',
+      dateRequired: '11/10/2026',
+      hospital: 'Whipps Cross Hospital',
+      ward: 'Maternity',
+      submissionDate
+    };
+    const details11 = resolveCancellationDetails(futureRec11, [], submissionDate);
+    assert.equal(details11.reason, 'future');
+
+    const email11 = getCancellationEmailContent({
+      vrm: futureRec11.vrm,
+      driverName: futureRec11.driverName,
+      validFrom: futureRec11.validFrom,
+      submissionDate: futureRec11.submissionDate,
+      reason: details11.reason
+    });
+    assert.equal(email11.subject, 'Cancelled: Concession Permit – AB12CDE');
+    const expectedBody11 = `Dear Test Driver,
+
+We have received your parking concession request for vehicle AB12CDE.
+
+The start date on your application was set to 11/10/2026, which is in the future. To prevent issuing an invalid concession, this request has been cancelled.
+
+If you still require parking, please contact your ward or department to submit a new concession request.
+
+If you continue to experience any issues or have any further queries, please contact: parkingadminbh.bartshealth@nhs.net
+
+Kind regards,
+Barts Health NHS Trust
+Car Parking Services Team`;
+    assert.equal(email11.plainText, expectedBody11);
+    assert.match(email11.htmlText, /<strong>AB12CDE<\/strong>/);
+    assert.match(email11.htmlText, /<a href="mailto:parkingadminbh\.bartshealth@nhs\.net"/);
+
+    // 12/10/2026 (4 days ahead) also resolves to 'future'
+    const futureRec12: CsvPermitRecord = {
+      id: '2012',
+      formId: '2012',
+      vrm: 'AB12CDE',
+      driverName: 'Test Driver',
+      validFrom: '12/10/2026',
+      dateRequired: '12/10/2026',
+      hospital: 'Whipps Cross Hospital',
+      ward: 'Maternity',
+      submissionDate
+    };
+    const details12 = resolveCancellationDetails(futureRec12, [], submissionDate);
+    assert.equal(details12.reason, 'future');
+    const email12 = getCancellationEmailContent({
+      vrm: futureRec12.vrm,
+      driverName: futureRec12.driverName,
+      validFrom: futureRec12.validFrom,
+      submissionDate: futureRec12.submissionDate,
+      reason: details12.reason
+    });
+    assert.match(email12.plainText, /The start date on your application was set to 12\/10\/2026, which is in the future\./);
+  });
+
+  // =========================================================================
   // TEST 7 — Expired-date cancellation (7+ days in the past)
   // Expected: canonical category 'expired'
   // =========================================================================

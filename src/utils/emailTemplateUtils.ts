@@ -6,7 +6,8 @@ import {
   getTodayISO,
   checkIsBlockedDuplicate,
   isRecordCancelled,
-  isPermitExpiredBackdate
+  isPermitExpiredBackdate,
+  MAX_DAYS_AHEAD
 } from "./csvParser";
 
 export type CancellationReason = 'future' | 'expired' | 'duplicate';
@@ -18,6 +19,7 @@ export interface EmailTemplateParams {
   validFrom?: string;
   validTo?: string;
   todayDate?: string;
+  submissionDate?: string;
   dateRequired?: string;
   activePermitExpiry?: string;
   reapplyDate?: string;
@@ -77,7 +79,7 @@ export function resolveCancellationDetails(
   }
 
   // Submission / processing reference date resolution:
-  const rawSubTime = record.completionTime || (record as any).completion_time || record.startTime || (record as any).start_time || record.createdAt || (record as any).created_at || (record as any).submissionDate;
+  const rawSubTime = (record as any).submissionDate || record.completionTime || (record as any).completion_time || record.startTime || (record as any).start_time || record.createdAt || (record as any).created_at;
   let subISO = "";
   if (rawSubTime) {
     subISO = parseDateToISO(String(rawSubTime)) || "";
@@ -234,8 +236,8 @@ export function resolveCancellationDetails(
     }
   }
 
-  // 4. Future concession requested 2+ days in advance
-  if (canonicalReason === "FUTURE" || (validFromISO && daysDiff > 1)) {
+  // 4. Future concession requested more than MAX_DAYS_AHEAD days in advance
+  if (canonicalReason === "FUTURE" || (validFromISO && daysDiff > MAX_DAYS_AHEAD)) {
     return {
       reason: 'future',
       currentExpiryDate: '',
@@ -243,7 +245,7 @@ export function resolveCancellationDetails(
     };
   }
 
-  // 5. Fallback within normal window (-6 to +1 days)
+  // 5. Fallback within normal window (-6 to +MAX_DAYS_AHEAD days)
   if (validFromISO) {
     if (cleanVrm && cleanVrm !== "PENDING" && cleanVrm !== "-" && database && database.length > 0) {
       const cleanRecordId = (val: any) => String(val || "").replace(/^#/, "").trim();
@@ -352,7 +354,8 @@ export function getSendEmailContent(params: EmailTemplateParams): EmailContentRe
 
   const subject = `Your QR Code Credentials - ${vrm}`;
 
-  const plainText = `Dear ${driverName},
+  const plainText = `
+Dear ${driverName},
 
 Please find attached your concession QR code.
 
@@ -371,6 +374,7 @@ Barts Health NHS Trust
 Car Parking Services Team`;
 
   const htmlText = `<div style="font-family: Calibri, Arial, sans-serif; font-size: 11pt; color: #000000; line-height: 1.35;">
+<br/>
 Dear ${driverName},<br/><br/>
 Please find attached your concession QR code.<br/><br/>
 On your first day of parking, please take the QR code to the pay machine, press Concession, and enter vehicle registration number <strong>${vrm}</strong>.<br/><br/>
@@ -397,7 +401,8 @@ export function getReplacementEmailContent(params: EmailTemplateParams): EmailCo
 
   const subject = `Replacement Parking Concession – ${vrm}`;
 
-  const plainText = `Dear ${driverName},
+  const plainText = `
+Dear ${driverName},
 
 Please find attached your replacement concession QR code. We apologise for any inconvenience caused by the previous code.
 
@@ -422,6 +427,7 @@ Car Parking Services Team`;
     : "";
 
   const htmlText = `<div style="font-family: Calibri, Arial, sans-serif; font-size: 11pt; color: #000000; line-height: 1.35;">
+<br/>
 Dear ${driverName},<br/><br/>
 Please find attached your replacement concession QR code. We apologise for any inconvenience caused by the previous code.<br/><br/>
 Please use this replacement QR code instead of your previous QR code.<br/><br/>
@@ -444,7 +450,7 @@ export const getResendConcessionEmailContent = getReplacementEmailContent;
 /**
  * Template 3: Cancellation Notice
  * Generates specific cancellation messages for the 3 scenarios:
- * 1. Date Invalid (Future): 2+ days ahead
+ * 1. Date Invalid (Future): more than MAX_DAYS_AHEAD days ahead
  * 2. Expired (Too Old): 7+ days ago
  * 3. Duplicate (Same VRM): active permit exists
  */
@@ -470,12 +476,12 @@ export function getCancellationEmailContent(
       reason = "duplicate";
     } else {
       const validFromIso = parseDateToISO(params.validFrom || params.dateRequired || "");
-      const refIso = parseDateToISO(params.todayDate) || getTodayISO();
+      const refIso = parseDateToISO(params.submissionDate || params.todayDate) || getTodayISO();
       if (validFromIso && refIso) {
         const [vy, vm, vd] = validFromIso.split("-").map(Number);
         const [ry, rm, rd] = refIso.split("-").map(Number);
         const daysDiff = Math.floor((new Date(vy, vm - 1, vd).getTime() - new Date(ry, rm - 1, rd).getTime()) / (1000 * 60 * 60 * 24));
-        if (daysDiff > 1) {
+        if (daysDiff > MAX_DAYS_AHEAD) {
           reason = 'future';
         } else if (daysDiff <= -7) {
           reason = 'expired';
@@ -493,12 +499,12 @@ export function getCancellationEmailContent(
     const rawReason = String(params.cancellationReason || "").trim().toUpperCase();
     if (rawReason === "DUPLICATE_VRM" || rawReason === "DUPLICATE" || rawReason === "" || rawReason === "MANUAL" || reason === 'future' || reason === 'expired') {
       const validFromIso = parseDateToISO(params.validFrom || params.dateRequired || "");
-      const refIso = parseDateToISO(params.todayDate) || getTodayISO();
+      const refIso = parseDateToISO(params.submissionDate || params.todayDate) || getTodayISO();
       if (validFromIso && refIso) {
         const [vy, vm, vd] = validFromIso.split("-").map(Number);
         const [ry, rm, rd] = refIso.split("-").map(Number);
         const daysDiff = Math.floor((new Date(vy, vm - 1, vd).getTime() - new Date(ry, rm - 1, rd).getTime()) / (1000 * 60 * 60 * 24));
-        if (daysDiff <= 1 && daysDiff > -7) {
+        if (daysDiff <= MAX_DAYS_AHEAD && daysDiff > -7) {
           reason = 'duplicate';
         }
       } else {
@@ -507,15 +513,15 @@ export function getCancellationEmailContent(
     }
   }
 
-  // Guard: a past date or date within normal window can NEVER be "in the future" (Category 1: 2+ days ahead)
+  // Guard: a past date or date within normal window can NEVER be "in the future" (Category 1: > MAX_DAYS_AHEAD days ahead)
   if (reason === 'future') {
     const validFromIso = parseDateToISO(params.validFrom || params.dateRequired || "");
-    const refIso = parseDateToISO(params.todayDate) || getTodayISO();
+    const refIso = parseDateToISO(params.submissionDate || params.todayDate) || getTodayISO();
     if (validFromIso && refIso) {
       const [vy, vm, vd] = validFromIso.split("-").map(Number);
       const [ry, rm, rd] = refIso.split("-").map(Number);
       const daysDiff = Math.floor((new Date(vy, vm - 1, vd).getTime() - new Date(ry, rm - 1, rd).getTime()) / (1000 * 60 * 60 * 24));
-      if (daysDiff <= 1) {
+      if (daysDiff <= MAX_DAYS_AHEAD) {
         if (daysDiff <= -7) {
           reason = 'expired';
         } else {
@@ -528,7 +534,7 @@ export function getCancellationEmailContent(
   // Guard: a date that is NOT 7+ days old can NEVER be "expired" if an active permit for this VRM exists (Category 2: 7+ days ago)
   if (reason === 'expired') {
     const validFromIso = parseDateToISO(params.validFrom || params.dateRequired || "");
-    const refIso = parseDateToISO(params.todayDate) || getTodayISO();
+    const refIso = parseDateToISO(params.submissionDate || params.todayDate) || getTodayISO();
     if (validFromIso && refIso) {
       const [vy, vm, vd] = validFromIso.split("-").map(Number);
       const [ry, rm, rd] = refIso.split("-").map(Number);

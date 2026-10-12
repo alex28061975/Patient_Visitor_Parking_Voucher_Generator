@@ -599,14 +599,18 @@ function PermitCardInner({
     ) {
       return true;
     }
+    const refSubDate = data.submissionDate || (data as any).completionTime || (data as any).startTime || (data as any).createdAt || data.todayDate;
+    if (isDateRequiredOutsideValidWindow(data.validFrom || data.dateRequired, refSubDate)) {
+      return true;
+    }
     const dataToCheck = {
       ...data,
       voucherCode: data.voucherCode === "CANCELLED" ? "CANCELLED" : "-",
       voucherCodesText: data.voucherCodesText === "CANCELLED" ? "CANCELLED" : "-",
       prePaidCode: data.prePaidCode === "CANCELLED" ? "CANCELLED" : "-",
     };
-    return isRecordCancelled(data, data.todayDate, database) || isRecordCancelled(dataToCheck, data.todayDate, database);
-  }, [data.todayDate, data.validFrom, data.dateRequired, data.isCancelled, data.status, data.voucherCodesText, data.voucherCode, data.prePaidCode, data, database]);
+    return isRecordCancelled(data, refSubDate, database) || isRecordCancelled(dataToCheck, refSubDate, database);
+  }, [data.todayDate, data.submissionDate, (data as any).completionTime, (data as any).startTime, (data as any).createdAt, data.validFrom, data.dateRequired, data.isCancelled, data.status, data.voucherCodesText, data.voucherCode, data.prePaidCode, data, database]);
 
   // isDateRequiredOutsideValidWindow covers both "too far in the future" and
   // "too far in the past" in one boolean - this distinguishes which, purely
@@ -615,10 +619,11 @@ function PermitCardInner({
     if (!isCancelled) return false;
     const validFromStr = data.validFrom || data.dateRequired || "";
     const validFromISO = parseDateToISO(validFromStr);
-    const refDateISO = parseDateToISO(data.todayDate) || getTodayISO();
+    const refSubDate = data.submissionDate || (data as any).completionTime || (data as any).startTime || (data as any).createdAt || data.todayDate;
+    const refDateISO = parseDateToISO(refSubDate) || getTodayISO();
     if (!validFromISO) return true;
     return validFromISO > refDateISO;
-  }, [isCancelled, data.validFrom, data.dateRequired, data.todayDate]);
+  }, [isCancelled, data.validFrom, data.dateRequired, data.submissionDate, (data as any).completionTime, (data as any).startTime, (data as any).createdAt, data.todayDate]);
 
   const daysActive = useMemo(() => {
     const validFromISO = parseDateToISO(data.validFrom || data.dateRequired || "");
@@ -628,17 +633,22 @@ function PermitCardInner({
     return Math.max(0, diff);
   }, [data.validFrom, data.dateRequired, data.todayDate]);
 
+  const refSubDate = useMemo(() => {
+    return data.submissionDate || (data as any).completionTime || (data as any).startTime || (data as any).createdAt || data.todayDate;
+  }, [data.submissionDate, (data as any).completionTime, (data as any).startTime, (data as any).createdAt, data.todayDate]);
+
   const cancellationDetails = useMemo(() => {
-    return resolveCancellationDetails(data, database || [], data.todayDate);
-  }, [data, database]);
+    return resolveCancellationDetails(data, database || [], refSubDate);
+  }, [data, database, refSubDate]);
 
   const getCancellationEmailContentCallback = useCallback(() => {
-    const details = resolveCancellationDetails(data, database || [], data.todayDate);
+    const details = resolveCancellationDetails(data, database || [], refSubDate);
     return getCancellationEmailContent({
       vrm: data.vrm,
       driverName: data.name,
       validFrom: data.validFrom,
-      todayDate: data.todayDate,
+      todayDate: refSubDate,
+      submissionDate: refSubDate,
       dateRequired: data.dateRequired,
       reason: details.reason,
       cancellationReason: data.cancellationReason,
@@ -647,7 +657,7 @@ function PermitCardInner({
       activePermitExpiry: details.currentExpiryDate,
       reapplyDate: details.earliestRenewalDate,
     });
-  }, [data, database]);
+  }, [data, database, refSubDate]);
 
   const isReplacement = useMemo(() => {
     // 0. Explicit resend / replacement markers on form data
@@ -1019,11 +1029,14 @@ function PermitCardInner({
       voucherCodesText: record.voucherCodesText === "CANCELLED" ? "CANCELLED" : "-",
       prePaidCode: record.prePaidCode === "CANCELLED" ? "CANCELLED" : "-",
     };
-    const isCancelled = isRecordCancelled(record, record.todayDate, database) ||
-                        isRecordCancelled(recordToCheck, record.todayDate, database);
+    const refSubDate = rec?.submissionDate || (rec as any)?.completionTime || (rec as any)?.startTime || (rec as any)?.createdAt || recTodayDate;
+    const isCancelledOutsideWindow = isDateRequiredOutsideValidWindow(rec?.validFrom || rec?.dateRequired || record?.validFrom || record?.dateRequired, refSubDate);
+    const isCancelled = isRecordCancelled(record, refSubDate, database) ||
+                        isRecordCancelled(recordToCheck, refSubDate, database) ||
+                        isCancelledOutsideWindow;
 
     const isCancelledRec = Boolean(
-      (rec ? isRecordCancelled(rec, recTodayDate, database) : isCancelled) ||
+      (rec ? (isRecordCancelled(rec, refSubDate, database) || isCancelledOutsideWindow) : isCancelled) ||
       (rec && (
         rec.isCancelled === true ||
         (typeof rec.status === 'string' && rec.status.toLowerCase().includes('cancel')) ||
@@ -2050,9 +2063,13 @@ function PermitCardInner({
       prePaidCode: targetRec.prePaidCode === "CANCELLED" ? "CANCELLED" : "-",
     };
 
+    const targetRefSubDate = targetRec.submissionDate || (targetRec as any).completionTime || (targetRec as any).startTime || (targetRec as any).createdAt || targetTodayDate;
+    const isTargetOutsideWindow = isDateRequiredOutsideValidWindow(targetRec.validFrom || targetRec.dateRequired, targetRefSubDate);
+
     const targetIsCancelled = Boolean(
-      (targetRecord ? isRecordCancelled(targetRec, targetTodayDate, database) : isCancelled) ||
-      isRecordCancelled(targetRec, targetTodayDate, database) ||
+      (targetRecord ? isRecordCancelled(targetRec, targetRefSubDate, database) : isCancelled) ||
+      isRecordCancelled(targetRec, targetRefSubDate, database) ||
+      isTargetOutsideWindow ||
       targetRec.isCancelled === true ||
       (typeof targetRec.status === 'string' && targetRec.status.toLowerCase().includes('cancel')) ||
       targetRec.voucherCode === 'CANCELLED' ||
@@ -2122,12 +2139,13 @@ function PermitCardInner({
     };
 
     if (targetIsCancelled) {
-      const details = resolveCancellationDetails(targetRec, database || [], targetTodayDate);
+      const details = resolveCancellationDetails(targetRec, database || [], targetRefSubDate);
       const cancelContent = getCancellationEmailContent({
         vrm: targetVrm,
         driverName: targetDriverName,
         validFrom: targetValidFrom,
-        todayDate: targetTodayDate,
+        todayDate: targetRefSubDate,
+        submissionDate: targetRefSubDate,
         dateRequired: targetDateRequired,
         reason: details.reason,
         cancellationReason: targetRec.cancellationReason,
