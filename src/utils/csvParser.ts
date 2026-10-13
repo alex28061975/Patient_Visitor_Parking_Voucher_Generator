@@ -2454,6 +2454,15 @@ export function isRecordCancelledCanonical(record: any, todayDateOrReference?: s
   const isExpiredDate = referenceDate && reqIso && Math.floor((new Date(reqIso + "T00:00:00").getTime() - new Date(referenceDate + "T00:00:00").getTime()) / 86400000) <= -7;
   if (isBackdate || Boolean(isExpiredDate)) return true;
 
+  const rawSubDate = record.completionTime || record.startTime || record.createdAt || record.submissionDate;
+  const subDateIso = rawSubDate ? parseDateToISO(String(rawSubDate)) : "";
+  if (subDateIso && reqIso) {
+    const aheadDays = Math.floor((new Date(reqIso + "T00:00:00").getTime() - new Date(subDateIso + "T00:00:00").getTime()) / 86400000);
+    if (aheadDays > MAX_DAYS_AHEAD) {
+      return true;
+    }
+  }
+
   // Explicitly active record: do not let stale CANCELLED string in voucherCode override active status
   if (record.isCancelled === false && String(record.status || "").trim().toUpperCase() === "ACTIVE") {
     return false;

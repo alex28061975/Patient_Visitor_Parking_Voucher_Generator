@@ -214,6 +214,15 @@ export function resolveCancellationDetails(
     };
   }
 
+  // Future concession requested more than MAX_DAYS_AHEAD days in advance
+  if (canonicalReason === "FUTURE" || (validFromISO && daysDiff > MAX_DAYS_AHEAD)) {
+    return {
+      reason: 'future',
+      currentExpiryDate: '',
+      earliestRenewalDate: ''
+    };
+  }
+
   const { currentExpiryDate, earliestRenewalDate, activePermitFound } = getActivePermitDates();
 
   // 2. Explicit canonical duplicate cancellation reason takes precedence over future check for duplicates
@@ -234,15 +243,6 @@ export function resolveCancellationDetails(
         earliestRenewalDate
       };
     }
-  }
-
-  // 4. Future concession requested more than MAX_DAYS_AHEAD days in advance
-  if (canonicalReason === "FUTURE" || (validFromISO && daysDiff > MAX_DAYS_AHEAD)) {
-    return {
-      reason: 'future',
-      currentExpiryDate: '',
-      earliestRenewalDate: ''
-    };
   }
 
   // 5. Fallback within normal window (-6 to +MAX_DAYS_AHEAD days)

@@ -118,6 +118,8 @@ function toTitleCase(str: string): string {
     .replace(/(?:^|\s|-)\S/g, (char) => char.toUpperCase());
 }
 
+const EMAIL_QR_SIZE = 600;
+
 // Helper to convert base64 Data URL to Blob synchronously
 function dataURLtoBlob(dataurl: string): Blob {
   const parts = dataurl.split(",");
@@ -929,7 +931,7 @@ function PermitCardInner({
       if (payload && payload !== "-" && payload !== "CANCELLED") {
         try {
           activeQrDataUrl = await QRCode.toDataURL(payload, {
-            width: 180,
+            width: EMAIL_QR_SIZE,
             margin: 1,
             errorCorrectionLevel: "M",
             color: { dark: "#111111", light: "#FFFFFF" }
@@ -1297,7 +1299,7 @@ function PermitCardInner({
           color: { dark: "#111111", light: "#FFFFFF" }
         }),
         QRCode.toDataURL(payload, {
-          width: 180,
+          width: EMAIL_QR_SIZE,
           margin: 1,
           errorCorrectionLevel: "M",
           color: { dark: "#111111", light: "#FFFFFF" }
@@ -2284,7 +2286,7 @@ function PermitCardInner({
       if (payload && payload !== "-" && payload !== "CANCELLED") {
         try {
           activeQrDataUrl = await QRCode.toDataURL(payload, {
-            width: 180,
+            width: EMAIL_QR_SIZE,
             margin: 1,
             errorCorrectionLevel: "M",
             color: { dark: "#111111", light: "#FFFFFF" }

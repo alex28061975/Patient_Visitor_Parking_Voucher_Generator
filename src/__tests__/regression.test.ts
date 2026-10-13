@@ -1512,7 +1512,7 @@ CON_ERR_2,,`;
     assert.match(email.plainText, /Please find attached your replacement concession QR code\. We apologise for any inconvenience caused by the previous code\./);
     assert.match(email.plainText, /Please use this replacement QR code instead of your previous QR code\./);
     assert.match(email.plainText, /On your next visit, please take the replacement QR code to the pay machine, press Concession, and enter vehicle registration number AB12CDE\./);
-    assert.match(email.machine || email.plainText, /The machine will then ask you to scan a blue badge or concession\. Please scan your replacement QR code at this point\./);
+    assert.match(email.plainText, /The machine will then ask you to scan a blue badge or concession\. Please scan your replacement QR code at this point\./);
     assert.match(email.plainText, /Your concession will allow you to park for 7 days, from 10\/10\/2026 to 16\/10\/2026\./);
     assert.match(email.plainText, /Please note that concession payments are non-refundable\./);
     assert.match(email.plainText, /If you continue to experience any issues or have any further queries, please contact: parkingadminbh\.bartshealth@nhs\.net/);
