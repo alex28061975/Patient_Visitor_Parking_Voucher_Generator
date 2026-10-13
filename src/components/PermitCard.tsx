@@ -119,6 +119,7 @@ function toTitleCase(str: string): string {
 }
 
 const EMAIL_QR_SIZE = 600;
+const REPLACEMENT_QR_SIZE = 180;
 
 // Helper to convert base64 Data URL to Blob synchronously
 function dataURLtoBlob(dataurl: string): Blob {
@@ -931,7 +932,7 @@ function PermitCardInner({
       if (payload && payload !== "-" && payload !== "CANCELLED") {
         try {
           activeQrDataUrl = await QRCode.toDataURL(payload, {
-            width: EMAIL_QR_SIZE,
+            width: REPLACEMENT_QR_SIZE,
             margin: 1,
             errorCorrectionLevel: "M",
             color: { dark: "#111111", light: "#FFFFFF" }
