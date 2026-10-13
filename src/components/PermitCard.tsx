@@ -118,7 +118,7 @@ function toTitleCase(str: string): string {
     .replace(/(?:^|\s|-)\S/g, (char) => char.toUpperCase());
 }
 
-const EMAIL_QR_SIZE = 600;
+const EMAIL_QR_SIZE = 180;
 const REPLACEMENT_QR_SIZE = 180;
 
 // Helper to convert base64 Data URL to Blob synchronously
