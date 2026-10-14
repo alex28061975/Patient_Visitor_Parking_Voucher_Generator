@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { PermitData, StorageMode } from "./types";
 import { CheckCircle2, AlertCircle, Info, CloudUpload, X } from "lucide-react";
 import { Header } from "./components/Header";
@@ -661,6 +661,36 @@ export function enrichRecordsWithVouchers(
   return recordsList.map((record, index) => enrichedByIndex.get(index) || record);
 }
 
+// Inexpensive equality check for string arrays / sets without JSON.stringify
+const areStringSetsEqual = (a: string[] | undefined, b: string[] | undefined): boolean => {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  let same = true;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) { same = false; break; }
+  }
+  if (same) return true;
+  const bSet = new Set(b);
+  for (let i = 0; i < a.length; i++) {
+    if (!bSet.has(a[i])) return false;
+  }
+  return true;
+};
+
+// Inexpensive equality check for Record<string, string> maps
+const areRecordStringMapsEqual = (a: Record<string, string> | undefined, b: Record<string, string> | undefined): boolean => {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  for (let i = 0; i < aKeys.length; i++) {
+    const k = aKeys[i];
+    if (a[k] !== b[k]) return false;
+  }
+  return true;
+};
+
 export default function App() {
   const [currentUserName] = useState<string>(() => safeLocalStorage.getItem("realtime_user_name") || "Colleague_" + Math.floor(1000 + Math.random() * 9000));
 
@@ -791,9 +821,15 @@ export default function App() {
     return {};
   });
 
+  const formDataRef = useRef(formData);
+  useEffect(() => {
+    formDataRef.current = formData;
+  }, [formData]);
+
   // Background polling to keep email open tracking synced with backend
   useEffect(() => {
     const pollEmailStatuses = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       try {
         const res = await fetch("/api/emails/statuses");
         if (!res.ok) return;
@@ -853,17 +889,12 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isPreviewCardOpen]);
 
-  const handlePreviewRecord = (record: CsvPermitRecord) => {
-    handleSelectRecord(record);
-    setIsPreviewCardOpen(true);
-  };
-
-  const showToast = (message: string, type: "success" | "info" | "warning" | "error" = "success") => {
+  const showToast = useCallback((message: string, type: "success" | "info" | "warning" | "error" = "success") => {
     setSyncToast({ message, type });
     setTimeout(() => {
       setSyncToast(prev => prev?.message === message ? null : prev);
     }, 4500);
-  };
+  }, []);
 
   const databaseRef = useRef<CsvPermitRecord[]>(database);
   const vouchersDatabaseRef = useRef<ParsedVoucherData[]>(vouchersDatabase);
@@ -884,6 +915,11 @@ export default function App() {
       return {};
     }
   });
+
+  const customVouchersRef = useRef<{[vrm: string]: string}>(customVouchers);
+  useEffect(() => {
+    customVouchersRef.current = customVouchers;
+  }, [customVouchers]);
 
   const [dispatchBy, setDispatchBy] = useState<{[key: string]: string}>(() => {
     const cached = safeLocalStorage.getItem("concessions_dispatch_by");
@@ -1077,10 +1113,11 @@ export default function App() {
   };
 
   // 🔥 DISPATCH STATUS HANDLER: Writes to Supabase first, then syncs React state
-  const markAsDispatched = async (vrm?: string, email?: string, record?: CsvPermitRecord): Promise<boolean> => {
+  const markAsDispatched = useCallback(async (vrm?: string, email?: string, record?: CsvPermitRecord): Promise<boolean> => {
     lastUserActionTimestampRef.current = Date.now();
     
-    const targetRecord: CsvPermitRecord | undefined = record || (vrm ? enrichedDatabase.find(r => r.vrm && r.vrm.toUpperCase().replace(/\s+/g, "") === vrm.toUpperCase().replace(/\s+/g, "")) : undefined) || (vrm ? { vrm, email } : undefined);
+    const currentDb = databaseRef.current || [];
+    const targetRecord: CsvPermitRecord | undefined = record || (vrm ? currentDb.find(r => r.vrm && r.vrm.toUpperCase().replace(/\s+/g, "") === vrm.toUpperCase().replace(/\s+/g, "")) : undefined) || (vrm ? { vrm, email } : undefined);
     if (!targetRecord) {
       console.error("❌ Record not found. Cannot mark as dispatched.");
       alert("❌ Record not found. Cannot mark as dispatched.");
@@ -1118,6 +1155,7 @@ export default function App() {
       });
       setUnsentKeys(prev => {
         const next = prev.filter(k => !combinedKeys.includes(k));
+        if (next.length === prev.length) return prev;
         unsentKeysRef.current = next;
         return next;
       });
@@ -1146,6 +1184,7 @@ export default function App() {
     });
     setUnsentKeys(prev => {
       const next = prev.filter(k => !combinedKeys.includes(k));
+      if (next.length === prev.length) return prev;
       unsentKeysRef.current = next;
       return next;
     });
@@ -1190,13 +1229,14 @@ export default function App() {
       alert(`❌ Dispatch Exception: ${err.message || 'Unknown database error'}`);
       return false;
     }
-  };
+  }, [currentUserName]);
 
   // 🔥 UNMARK DISPATCH HANDLER: Removes from Supabase and updates state
-  const unmarkAsDispatched = async (vrm?: string, email?: string, record?: CsvPermitRecord): Promise<boolean> => {
+  const unmarkAsDispatched = useCallback(async (vrm?: string, email?: string, record?: CsvPermitRecord): Promise<boolean> => {
     lastUserActionTimestampRef.current = Date.now();
     
-    const targetRecord: CsvPermitRecord | undefined = record || (vrm ? enrichedDatabase.find(r => r.vrm && r.vrm.toUpperCase().replace(/\s+/g, "") === vrm.toUpperCase().replace(/\s+/g, "")) : undefined) || (vrm ? { vrm, email } : undefined);
+    const currentDb = databaseRef.current || [];
+    const targetRecord: CsvPermitRecord | undefined = record || (vrm ? currentDb.find(r => r.vrm && r.vrm.toUpperCase().replace(/\s+/g, "") === vrm.toUpperCase().replace(/\s+/g, "")) : undefined) || (vrm ? { vrm, email } : undefined);
     if (!targetRecord) {
       console.error("❌ Record not found. Cannot unmark as dispatched.");
       alert("❌ Record not found. Cannot unmark as dispatched.");
@@ -1270,7 +1310,7 @@ export default function App() {
       setUnsentKeys(rolledBackUnsent);
       return false;
     }
-  };
+  }, []);
 
   const clearDispatchedHistory = async () => {
     dispatchedKeysRef.current = [];
@@ -1334,12 +1374,26 @@ export default function App() {
           Object.entries(dbDispatchedData.dispatchBy || {}).filter(([k]) => !currentUnsent.has(k))
         );
 
-        dispatchedKeysRef.current = validKeys;
-        setDispatchedKeys(validKeys);
-        dispatchDatesRef.current = filteredDates;
-        dispatchByRef.current = filteredDispatchBy;
-        setDispatchDates(filteredDates);
-        setDispatchBy(filteredDispatchBy);
+        const isDispatchedEqual = areStringSetsEqual(dispatchedKeysRef.current, validKeys);
+        if (!isDispatchedEqual) {
+          dispatchedKeysRef.current = validKeys;
+          setDispatchedKeys(validKeys);
+          safeLocalStorage.setItem("concessions_dispatched_keys", JSON.stringify(validKeys));
+        }
+
+        const isDatesEqual = areRecordStringMapsEqual(dispatchDatesRef.current, filteredDates);
+        if (!isDatesEqual) {
+          dispatchDatesRef.current = filteredDates;
+          setDispatchDates(filteredDates);
+          safeLocalStorage.setItem("concessions_dispatch_dates", JSON.stringify(filteredDates));
+        }
+
+        const isByEqual = areRecordStringMapsEqual(dispatchByRef.current, filteredDispatchBy);
+        if (!isByEqual) {
+          dispatchByRef.current = filteredDispatchBy;
+          setDispatchBy(filteredDispatchBy);
+          safeLocalStorage.setItem("concessions_dispatch_by", JSON.stringify(filteredDispatchBy));
+        }
       }
     } catch (err) {
       console.warn("Dispatched keys background sync error:", err);
@@ -1347,7 +1401,7 @@ export default function App() {
   };
 
   // 🔥 FIX: refreshDatabase - loads dispatched keys from Supabase without stale state closures
-  const refreshDatabase = async (overrideFilter?: '7days' | '30days' | 'all', silent: boolean = false) => {
+  const refreshDatabase = useCallback(async (overrideFilter?: '7days' | '30days' | 'all', silent: boolean = false) => {
     // If in Offline Local Storage mode, do NOT perform network calls
     if (storageModeRef.current === "offline") {
       const localDbStr = safeLocalStorage.getItem("concessions_permit_db");
@@ -1370,29 +1424,42 @@ export default function App() {
         try {
           const parsed = JSON.parse(localVouchersStr);
           const normalized = normalizeVouchersList(parsed);
-          vouchersDatabaseRef.current = normalized;
-          setVouchersDatabase(normalized);
+          const currentVouchers = vouchersDatabaseRef.current || [];
+          const isVouchersIdentical = currentVouchers.length === normalized.length && currentVouchers.every((v, idx) => {
+            const target = normalized[idx];
+            return target && v.code === target.code && v.vrm === target.vrm && v.validFrom === target.validFrom && v.validTo === target.validTo && v.isUsed === target.isUsed && v.status === target.status;
+          });
+          if (!isVouchersIdentical) {
+            vouchersDatabaseRef.current = normalized;
+            setVouchersDatabase(normalized);
+          }
         } catch (e) {}
       }
       if (localDispatchedStr) {
         try {
           const parsed = JSON.parse(localDispatchedStr);
-          dispatchedKeysRef.current = parsed;
-          setDispatchedKeys(parsed);
+          if (Array.isArray(parsed) && !areStringSetsEqual(dispatchedKeysRef.current, parsed)) {
+            dispatchedKeysRef.current = parsed;
+            setDispatchedKeys(parsed);
+          }
         } catch (e) {}
       }
       if (localDatesStr) {
         try {
           const parsed = JSON.parse(localDatesStr);
-          dispatchDatesRef.current = parsed;
-          setDispatchDates(parsed);
+          if (parsed && typeof parsed === "object" && !areRecordStringMapsEqual(dispatchDatesRef.current, parsed)) {
+            dispatchDatesRef.current = parsed;
+            setDispatchDates(parsed);
+          }
         } catch (e) {}
       }
       if (localByStr) {
         try {
           const parsed = JSON.parse(localByStr);
-          dispatchByRef.current = parsed;
-          setDispatchBy(parsed);
+          if (parsed && typeof parsed === "object" && !areRecordStringMapsEqual(dispatchByRef.current, parsed)) {
+            dispatchByRef.current = parsed;
+            setDispatchBy(parsed);
+          }
         } catch (e) {}
       }
       return;
@@ -1431,6 +1498,9 @@ export default function App() {
             rec.driverName === target.driverName &&
             rec.dateRequired === target.dateRequired &&
             rec.voucherCode === target.voucherCode &&
+            rec.voucherCodesText === target.voucherCodesText &&
+            rec.status === target.status &&
+            rec.isCancelled === target.isCancelled &&
             rec.startTime === target.startTime;
         });
 
@@ -1482,6 +1552,10 @@ export default function App() {
             const cleanPhoneMatched = formatPhoneNumber(matched.phone || "");
             const cleanEmailMatched = (matched.email || "").toLowerCase();
 
+            const hasRep = Boolean(matched.replacementCode || prev.replacementCode);
+            const repCode = matched.replacementCode || prev.replacementCode;
+            const vCode = hasRep ? repCode : (matched.voucherCode || prev.voucherCodesText || "-");
+
             if (
               prev.vrm === cleanVrmMatched &&
               prev.name === cleanNameMatched &&
@@ -1489,14 +1563,13 @@ export default function App() {
               prev.ward === cleanWardMatched &&
               prev.validFrom === cleanDateMatched &&
               prev.phone === cleanPhoneMatched &&
-              prev.email === cleanEmailMatched
+              prev.email === cleanEmailMatched &&
+              prev.voucherCodesText === vCode &&
+              prev.status === (matched.status || prev.status) &&
+              prev.validTo === (matched.validTo || matched.dateExpiry || prev.validTo)
             ) {
               return prev;
             }
-
-            const hasRep = Boolean(matched.replacementCode || prev.replacementCode);
-            const repCode = matched.replacementCode || prev.replacementCode;
-            const vCode = hasRep ? repCode : (matched.voucherCode || prev.voucherCodesText || "-");
 
             return {
               ...prev,
@@ -1520,18 +1593,15 @@ export default function App() {
         }
 
         const countFromDb = (dbPermits as { totalCount?: number }).totalCount;
-        if (typeof countFromDb === 'number' && countFromDb > 0) {
-          setTotalRecordsCount(countFromDb);
-        } else {
-          setTotalRecordsCount(databaseRef.current.length);
-        }
-        setHasFullHistoryLoaded(false);
+        const nextTotal = (typeof countFromDb === 'number' && countFromDb > 0) ? countFromDb : databaseRef.current.length;
+        setTotalRecordsCount(prev => prev === nextTotal ? prev : nextTotal);
+        setHasFullHistoryLoaded(prev => prev ? false : prev);
       }
       if (dbVouchers) {
-        const currentVouchersDb = vouchersDatabaseRef.current;
+        const currentVouchersDb = vouchersDatabaseRef.current || [];
         const isVouchersIdentical = currentVouchersDb.length === dbVouchers.length && currentVouchersDb.every((v, idx) => {
           const target = dbVouchers[idx];
-          return target && v.code === target.code && v.vrm === target.vrm && v.validFrom === target.validFrom && v.validTo === target.validTo;
+          return target && v.code === target.code && v.vrm === target.vrm && v.validFrom === target.validFrom && v.validTo === target.validTo && v.isUsed === target.isUsed && v.status === target.status;
         });
         if (!isVouchersIdentical) {
           vouchersDatabaseRef.current = dbVouchers;
@@ -1566,16 +1636,26 @@ export default function App() {
           Object.entries(dbDispatchedData.dispatchBy || {}).filter(([k]) => !currentUnsent.has(k))
         );
 
-        dispatchedKeysRef.current = validKeys;
-        setDispatchedKeys(validKeys);
-        dispatchDatesRef.current = filteredDates;
-        dispatchByRef.current = filteredDispatchBy;
-        setDispatchDates(filteredDates);
-        setDispatchBy(filteredDispatchBy);
+        const isDispatchedEqual = areStringSetsEqual(dispatchedKeysRef.current, validKeys);
+        if (!isDispatchedEqual) {
+          dispatchedKeysRef.current = validKeys;
+          setDispatchedKeys(validKeys);
+          safeLocalStorage.setItem("concessions_dispatched_keys", JSON.stringify(validKeys));
+        }
 
-        safeLocalStorage.setItem("concessions_dispatched_keys", JSON.stringify(validKeys));
-        safeLocalStorage.setItem("concessions_dispatch_dates", JSON.stringify(filteredDates));
-        safeLocalStorage.setItem("concessions_dispatch_by", JSON.stringify(filteredDispatchBy));
+        const isDatesEqual = areRecordStringMapsEqual(dispatchDatesRef.current, filteredDates);
+        if (!isDatesEqual) {
+          dispatchDatesRef.current = filteredDates;
+          setDispatchDates(filteredDates);
+          safeLocalStorage.setItem("concessions_dispatch_dates", JSON.stringify(filteredDates));
+        }
+
+        const isByEqual = areRecordStringMapsEqual(dispatchByRef.current, filteredDispatchBy);
+        if (!isByEqual) {
+          dispatchByRef.current = filteredDispatchBy;
+          setDispatchBy(filteredDispatchBy);
+          safeLocalStorage.setItem("concessions_dispatch_by", JSON.stringify(filteredDispatchBy));
+        }
       }
     } catch (err) {
       console.warn("Real-time database fetch error:", err);
@@ -1585,7 +1665,7 @@ export default function App() {
         setIsLoadingHistory(false);
       }
     }
-  };
+  }, []);
 
   // 🔥 Manual Sync Handler for Cloud Mode
   const handleManualSync = async () => {
@@ -1717,9 +1797,9 @@ export default function App() {
     }
   };
 
-  const handleDateRangeFilterChange = (newFilter: '7days' | '30days' | 'all') => {
+  const handleDateRangeFilterChange = useCallback((newFilter: '7days' | '30days' | 'all') => {
     setDateRangeFilter(newFilter);
-  };
+  }, []);
 
   const handleExportExcel = async () => {
     let recordsToExport = database;
@@ -1771,7 +1851,7 @@ export default function App() {
               setTotalRecordsCount(reconciled.length);
             } catch (e) {}
           } else {
-            const demoData = parsePermitCsv(INITIAL_DEMO_CSV);
+            const demoData = autoCancelDuplicates(parsePermitCsv(INITIAL_DEMO_CSV));
             setDatabase(demoData);
             databaseRef.current = demoData;
             setTotalRecordsCount(demoData.length);
@@ -1813,13 +1893,13 @@ export default function App() {
               databaseRef.current = reconciled;
               setTotalRecordsCount(reconciled.length);
             } catch (e) {
-              const demoData = parsePermitCsv(INITIAL_DEMO_CSV);
+              const demoData = autoCancelDuplicates(parsePermitCsv(INITIAL_DEMO_CSV));
               setDatabase(demoData);
               databaseRef.current = demoData;
               setTotalRecordsCount(demoData.length);
             }
           } else {
-            const demoData = parsePermitCsv(INITIAL_DEMO_CSV);
+            const demoData = autoCancelDuplicates(parsePermitCsv(INITIAL_DEMO_CSV));
             setDatabase(demoData);
             databaseRef.current = demoData;
             setTotalRecordsCount(demoData.length);
@@ -1863,11 +1943,12 @@ export default function App() {
           refreshDatabase(undefined, true);
         });
 
+        // Safety reconciliation poll (5 minutes). Realtime subscriptions + visibilitychange provide instant updates.
         pollInterval = setInterval(() => {
           if (storageModeRef.current === "cloud" && document.visibilityState === 'visible') {
             refreshDatabase(undefined, true);
           }
-        }, 30000);
+        }, 300000);
 
         window.addEventListener("visibilitychange", handleVisibilityChange);
       } else {
@@ -1880,10 +1961,10 @@ export default function App() {
               setDatabase(reconciled);
               databaseRef.current = reconciled;
             } catch (e) {
-              setDatabase(parsePermitCsv(INITIAL_DEMO_CSV));
+              setDatabase(autoCancelDuplicates(parsePermitCsv(INITIAL_DEMO_CSV)));
             }
           } else {
-            setDatabase(parsePermitCsv(INITIAL_DEMO_CSV));
+            setDatabase(autoCancelDuplicates(parsePermitCsv(INITIAL_DEMO_CSV)));
           }
         }
 
@@ -1917,9 +1998,8 @@ export default function App() {
   }, [storageMode]);
 
   const enrichedDatabase = React.useMemo(() => {
-    const reconciled = autoCancelDuplicates(database);
     return enrichRecordsWithVouchers(
-      reconciled,
+      database,
       vouchersDatabase,
       customVouchers,
       formData.todayDate || getTodayISO(),
@@ -2014,7 +2094,7 @@ export default function App() {
     }
   }, [formData.todayDate, enrichedDatabase.length, dispatchedKeys, unsentKeys, lastProcessedDate, lastDbLength]);
 
-  const handleUpdate = (updates: Partial<PermitData>) => {
+  const handleUpdate = useCallback((updates: Partial<PermitData>) => {
     setFormData((prev) => {
       let next = { ...prev, ...updates };
 
@@ -2069,23 +2149,23 @@ export default function App() {
     });
 
     if (updates.voucherCodesText !== undefined) {
-      const activeVrm = updates.vrm || formData.vrm;
+      const activeVrm = updates.vrm || formDataRef.current.vrm;
       const cleanVrm = activeVrm ? activeVrm.toUpperCase().replace(/\s+/g, "") : "";
-      const activeDateISO = parseDateToISO(formData.validFrom || formData.todayDate || "") || getTodayISO();
-      const targetId = String(updates.id || formData.id || "").trim();
-      const targetFormId = String(updates.formId || formData.formId || "").trim();
+      const activeDateISO = parseDateToISO(formDataRef.current.validFrom || formDataRef.current.todayDate || "") || getTodayISO();
+      const targetId = String(updates.id || formDataRef.current.id || "").trim();
+      const targetFormId = String(updates.formId || formDataRef.current.formId || "").trim();
 
       const candidateTarget = {
-        id: updates.id || formData.id,
-        formId: updates.formId || formData.formId,
+        id: updates.id || formDataRef.current.id,
+        formId: updates.formId || formDataRef.current.formId,
         vrm: cleanVrm,
-        validFrom: updates.validFrom || formData.validFrom,
-        dateRequired: updates.dateRequired || formData.dateRequired,
-        todayDate: updates.todayDate || formData.todayDate || activeDateISO
+        validFrom: updates.validFrom || formDataRef.current.validFrom,
+        dateRequired: updates.dateRequired || formDataRef.current.dateRequired,
+        todayDate: updates.todayDate || formDataRef.current.todayDate || activeDateISO
       };
 
       if (cleanVrm || targetId || targetFormId) {
-        const nextCustomVouchers = { ...customVouchers };
+        const nextCustomVouchers = { ...customVouchersRef.current };
         if (targetFormId) {
           nextCustomVouchers[targetFormId] = updates.voucherCodesText || "";
         }
@@ -2098,6 +2178,7 @@ export default function App() {
           nextCustomVouchers[keyWithDate] = updates.voucherCodesText || "";
         }
         setCustomVouchers(nextCustomVouchers);
+        customVouchersRef.current = nextCustomVouchers;
         safeLocalStorage.setItem("concessions_custom_vouchers", JSON.stringify(nextCustomVouchers));
         const nowTimestamp = Date.now();
         safeLocalStorage.setItem("concessions_custom_vouchers_last_modified", String(nowTimestamp));
@@ -2163,7 +2244,8 @@ export default function App() {
         });
 
         // When a voucher code is changed or selected from Active Date Codes, reset this permit's STATUS to Pending
-        const targetRecord = enrichedDatabase.find(r => isRecordMatch(r, candidateTarget));
+        const currentDb = databaseRef.current || [];
+        const targetRecord = currentDb.find(r => isRecordMatch(r, candidateTarget));
 
         const keysToUnsent: string[] = [];
         if (targetRecord) {
@@ -2171,19 +2253,19 @@ export default function App() {
           const pk = getRecordPrimaryKey(targetRecord);
           if (pk) keysToUnsent.push(pk);
         }
-        if (updates.id || formData.id) {
-          keysToUnsent.push(String(updates.id || formData.id));
+        if (updates.id || formDataRef.current.id) {
+          keysToUnsent.push(String(updates.id || formDataRef.current.id));
         }
-        if (updates.formId || formData.formId) {
-          keysToUnsent.push(String(updates.formId || formData.formId));
+        if (updates.formId || formDataRef.current.formId) {
+          keysToUnsent.push(String(updates.formId || formDataRef.current.formId));
         }
         if (cleanVrm) {
           keysToUnsent.push(cleanVrm);
           if (activeDateISO) {
             keysToUnsent.push(`${cleanVrm}_${activeDateISO}`);
           }
-          if (formData.name || updates.name) {
-            const nameStr = (updates.name || formData.name || "").trim();
+          if (formDataRef.current.name || updates.name) {
+            const nameStr = (updates.name || formDataRef.current.name || "").trim();
             keysToUnsent.push(`${nameStr}_${cleanVrm}_${activeDateISO}`.toUpperCase().replace(/[^A-Z0-9]/g, ""));
           }
         }
@@ -2192,34 +2274,37 @@ export default function App() {
         if (uniqueKeysToUnsent.length > 0) {
           setUnsentKeys(prev => {
             const next = Array.from(new Set([...prev, ...uniqueKeysToUnsent]));
+            if (next.length === prev.length) return prev;
             unsentKeysRef.current = next;
             return next;
           });
           setDispatchedKeys(prev => {
             const next = prev.filter(k => !uniqueKeysToUnsent.includes(k));
+            if (next.length === prev.length) return prev;
             dispatchedKeysRef.current = next;
             return next;
           });
         }
       }
     }
-  };
+  }, []);
 
-  const handleProcessingDateChange = (dateISO: string) => {
+  const handleProcessingDateChange = useCallback((dateISO: string) => {
     if (dateISO) {
       setFormData(prev => ({
         ...prev,
         todayDate: dateISO
       }));
     }
-  };
+  }, []);
 
-  const handleSelectRecord = (record: CsvPermitRecord) => {
+  const handleSelectRecord = useCallback((record: CsvPermitRecord) => {
     isManualSelectionRef.current = true;
     isUserNavigationRef.current = true;
     const sId = record.id !== undefined && record.id !== null ? String(record.id).trim() : "";
     const sFormId = record.formId !== undefined && record.formId !== null ? String(record.formId).trim() : "";
-    const enrichedRecord = (enrichedDatabase || []).find(r => {
+    const currentDb = databaseRef.current || [];
+    const enrichedRecord = currentDb.find(r => {
       const rId = r.id !== undefined && r.id !== null ? String(r.id).trim() : "";
       const rFormId = r.formId !== undefined && r.formId !== null ? String(r.formId).trim() : "";
       return Boolean(
@@ -2239,8 +2324,8 @@ export default function App() {
       enrichedRecord.vrm,
       enrichedRecord.driverName,
       enrichedRecord.dateRequired,
-      dispatchedKeys,
-      unsentKeys
+      dispatchedKeysRef.current,
+      unsentKeysRef.current
     );
 
     const isRepPending = Boolean(
@@ -2276,14 +2361,15 @@ export default function App() {
       emailType: isRepPending ? "RESEND_CONCESSION" : "SEND_CONCESSION",
       emailTemplate: isRepPending ? "replacement" : "new"
     }));
-  };
+  }, []);
 
-  const handleSelectRecordQuickSearch = (record: CsvPermitRecord) => {
+  const handleSelectRecordQuickSearch = useCallback((record: CsvPermitRecord) => {
     isManualSelectionRef.current = true;
     isUserNavigationRef.current = true;
     const sId = record.id !== undefined && record.id !== null ? String(record.id).trim() : "";
     const sFormId = record.formId !== undefined && record.formId !== null ? String(record.formId).trim() : "";
-    const enrichedRecord = (enrichedDatabase || []).find(r => {
+    const currentDb = databaseRef.current || [];
+    const enrichedRecord = currentDb.find(r => {
       const rId = r.id !== undefined && r.id !== null ? String(r.id).trim() : "";
       const rFormId = r.formId !== undefined && r.formId !== null ? String(r.formId).trim() : "";
       return Boolean(
@@ -2303,8 +2389,8 @@ export default function App() {
       enrichedRecord.vrm,
       enrichedRecord.driverName,
       enrichedRecord.dateRequired,
-      dispatchedKeys,
-      unsentKeys
+      dispatchedKeysRef.current,
+      unsentKeysRef.current
     );
 
     const isRepPendingQuick = Boolean(
@@ -2340,13 +2426,19 @@ export default function App() {
       emailType: isRepPendingQuick ? "RESEND_CONCESSION" : "SEND_CONCESSION",
       emailTemplate: isRepPendingQuick ? "replacement" : "new"
     }));
-  };
+  }, []);
 
-  const handleEditRecord = (record: CsvPermitRecord, resolvedCode?: string) => {
+  const handlePreviewRecord = useCallback((record: CsvPermitRecord) => {
+    handleSelectRecord(record);
+    setIsPreviewCardOpen(true);
+  }, [handleSelectRecord]);
+
+  const handleEditRecord = useCallback((record: CsvPermitRecord, resolvedCode?: string) => {
     const recId = record.id !== undefined && record.id !== null ? String(record.id).trim() : "";
     const recFormId = record.formId !== undefined && record.formId !== null ? String(record.formId).trim() : "";
+    const currentDb = databaseRef.current || [];
 
-    const target = database.find(r => {
+    const target = currentDb.find(r => {
       const rId = r.id !== undefined && r.id !== null ? String(r.id).trim() : "";
       const rFormId = r.formId !== undefined && r.formId !== null ? String(r.formId).trim() : "";
       return Boolean((recFormId && rFormId === recFormId) || (recId && rId === recId));
@@ -2363,9 +2455,9 @@ export default function App() {
     setEditingRecord(recordToEdit);
     setEditingResolvedVoucherCode(resolvedCode || record.voucherCode || "");
     setIsEditModalOpen(true);
-  };
+  }, [handleSelectRecord]);
 
-  const handleSaveRecord = async (updatedRecord: CsvPermitRecord) => {
+  const handleSaveRecord = useCallback(async (updatedRecord: CsvPermitRecord) => {
     // Defense-in-depth: Validate changed voucher code using canonical Active Date Code rules
     if (editingRecord && updatedRecord.voucherCode) {
       const origCode = cleanVoucherCodeValue(
@@ -2380,7 +2472,7 @@ export default function App() {
         newCode: updatedRecord.voucherCode,
         permitDateRequired: updatedRecord.dateRequired || updatedRecord.validFrom || "",
         permitDateExpiry: updatedRecord.dateExpiry || updatedRecord.validTo || "",
-        vouchersDatabase
+        vouchersDatabase: vouchersDatabaseRef.current || []
       });
 
       if (!validation.isValid) {
@@ -2412,7 +2504,8 @@ export default function App() {
     lastUserActionTimestampRef.current = Date.now();
 
     let recordFound = false;
-    const updatedDb = (database || []).map(item => {
+    const currentDb = databaseRef.current || [];
+    const updatedDb = currentDb.map(item => {
       if (isRecordMatch(item, updatedRecord)) {
         recordFound = true;
         return { ...item, ...updatedRecord };
@@ -2425,11 +2518,12 @@ export default function App() {
     }
 
     const sorted = sortRecordsByFormIdDesc(updatedDb);
-    setDatabase(sorted);
-    databaseRef.current = sorted;
-    setTotalRecordsCount(prev => Math.max(prev, sorted.length));
+    const reconciled = autoCancelDuplicates(sorted);
+    setDatabase(reconciled);
+    databaseRef.current = reconciled;
+    setTotalRecordsCount(prev => Math.max(prev, reconciled.length));
 
-    safeLocalStorage.setItem("concessions_permit_db", JSON.stringify(sorted));
+    safeLocalStorage.setItem("concessions_permit_db", JSON.stringify(reconciled));
     const nowTimestamp = Date.now();
     safeLocalStorage.setItem("concessions_permit_db_last_modified", String(nowTimestamp));
 
@@ -2439,13 +2533,14 @@ export default function App() {
       const dateISO = parseDateToISO(updatedRecord.dateRequired || "") || getTodayISO();
       const codeVal = updatedRecord.replacementCode || updatedRecord.voucherCode || "-";
 
-      const nextCustom = { ...customVouchers };
+      const nextCustom = { ...customVouchersRef.current };
       if (updatedRecord.formId) nextCustom[String(updatedRecord.formId)] = codeVal;
       if (updatedRecord.id) nextCustom[String(updatedRecord.id)] = codeVal;
       if (cleanVrm && dateISO) nextCustom[`${cleanVrm}_${dateISO}`] = codeVal;
       if (cleanVrm) nextCustom[cleanVrm] = codeVal;
 
       setCustomVouchers(nextCustom);
+      customVouchersRef.current = nextCustom;
       safeLocalStorage.setItem("concessions_custom_vouchers", JSON.stringify(nextCustom));
     }
 
@@ -2454,17 +2549,42 @@ export default function App() {
     const keys = Array.from(new Set([pk, ...getRecordKeys(updatedRecord)].filter(Boolean)));
     if (updatedRecord.status === "SENT") {
       setDispatchedKeys(prev => Array.from(new Set([...prev, ...keys])));
-      setUnsentKeys(prev => prev.filter(k => !keys.includes(k)));
+      setUnsentKeys(prev => {
+        const next = prev.filter(k => !keys.includes(k));
+        if (next.length === prev.length) return prev;
+        unsentKeysRef.current = next;
+        return next;
+      });
     } else if (updatedRecord.status === "UNSENT") {
-      setUnsentKeys(prev => Array.from(new Set([...prev, ...keys])));
-      setDispatchedKeys(prev => prev.filter(k => !keys.includes(k)));
+      setUnsentKeys(prev => {
+        const next = Array.from(new Set([...prev, ...keys]));
+        if (next.length === prev.length) return prev;
+        unsentKeysRef.current = next;
+        return next;
+      });
+      setDispatchedKeys(prev => {
+        const next = prev.filter(k => !keys.includes(k));
+        if (next.length === prev.length) return prev;
+        dispatchedKeysRef.current = next;
+        return next;
+      });
     } else if (updatedRecord.status === "PENDING") {
-      setUnsentKeys(prev => prev.filter(k => !keys.includes(k)));
-      setDispatchedKeys(prev => prev.filter(k => !keys.includes(k)));
+      setUnsentKeys(prev => {
+        const next = prev.filter(k => !keys.includes(k));
+        if (next.length === prev.length) return prev;
+        unsentKeysRef.current = next;
+        return next;
+      });
+      setDispatchedKeys(prev => {
+        const next = prev.filter(k => !keys.includes(k));
+        if (next.length === prev.length) return prev;
+        dispatchedKeysRef.current = next;
+        return next;
+      });
     }
 
     // Update active permit formData if this edited record is currently loaded
-    if (isRecordMatch(updatedRecord, formData)) {
+    if (isRecordMatch(updatedRecord, formDataRef.current)) {
       const hasReplacement = Boolean(updatedRecord.replacementCode);
       setFormData(prev => ({
         ...prev,
@@ -2489,12 +2609,12 @@ export default function App() {
     setIsEditModalOpen(false);
     setEditingRecord(null);
     return true;
-  };
+  }, [editingRecord, editingResolvedVoucherCode]);
 
   // ⭐ FIXED: reconcile incoming Excel records with the existing database BEFORE duplicate cancellation.
   // This is important when an older record was previously marked CANCELLED but a fresh Excel
   // import contains the same record in its original/active form. The earliest request must win.
-  const handleDatabaseChange = async (incomingDb: CsvPermitRecord[]) => {
+  const handleDatabaseChange = useCallback(async (incomingDb: CsvPermitRecord[]) => {
     safeLocalStorage.removeItem("concessions_unsent_keys");
     clearDuplicateCheckCache();
 
@@ -2515,7 +2635,7 @@ export default function App() {
     const mergedByKey = new Map<string, CsvPermitRecord>();
     const unkeyed: CsvPermitRecord[] = [];
 
-    (database || []).forEach(existing => {
+    (databaseRef.current || []).forEach(existing => {
       const key = getKey(existing);
       if (key) mergedByKey.set(key, { ...existing });
       else unkeyed.push({ ...existing });
@@ -2634,9 +2754,9 @@ export default function App() {
         voucherCodesText: firstRecord.voucherCode || prev.voucherCodesText || ""
       }));
     }
-  };
+  }, [refreshDatabase]);
 
-  const handleVouchersDatabaseChange = async (incomingVouchers: ParsedVoucherData[]) => {
+  const handleVouchersDatabaseChange = useCallback(async (incomingVouchers: ParsedVoucherData[]) => {
     clearDuplicateCheckCache();
     // ⭐ FIX: Clear any customVouchers entries whose codes no longer exist in incoming vouchers
     const validCodes = new Set(
@@ -2645,8 +2765,9 @@ export default function App() {
         .map(v => cleanVoucherCodeValue(v.code).toUpperCase())
     );
 
+    const currentCustom = customVouchersRef.current || {};
     const cleanedCustomVouchers: Record<string, string> = {};
-    Object.entries(customVouchers || {}).forEach(([key, raw]) => {
+    Object.entries(currentCustom).forEach(([key, raw]) => {
       if (raw && typeof raw === "string") {
         const clean = cleanVoucherCodeValue(raw).toUpperCase();
         if (validCodes.has(clean)) {
@@ -2655,15 +2776,16 @@ export default function App() {
       }
     });
 
-    if (Object.keys(cleanedCustomVouchers).length !== Object.keys(customVouchers || {}).length) {
+    if (Object.keys(cleanedCustomVouchers).length !== Object.keys(currentCustom).length) {
       setCustomVouchers(cleanedCustomVouchers);
+      customVouchersRef.current = cleanedCustomVouchers;
       safeLocalStorage.setItem("concessions_custom_vouchers", JSON.stringify(cleanedCustomVouchers));
     }
 
     const mergedMap = new Map<string, ParsedVoucherData>();
     const todayISO = getTodayISO();
 
-    (vouchersDatabase || []).forEach(v => {
+    (vouchersDatabaseRef.current || []).forEach(v => {
       if (!v.code) return;
       const cleanKey = cleanVoucherCodeValue(v.code).toUpperCase();
       if (cleanKey && cleanKey !== "-") {
@@ -2704,6 +2826,7 @@ export default function App() {
 
     const combinedVouchers = Array.from(mergedMap.values());
     setVouchersDatabase(combinedVouchers);
+    vouchersDatabaseRef.current = combinedVouchers;
 
     safeLocalStorage.setItem("concessions_vouchers_db", JSON.stringify(combinedVouchers));
     const nowTimestamp = Date.now();
@@ -2713,9 +2836,9 @@ export default function App() {
       await syncVouchersToSupabase(combinedVouchers, false);
       await refreshDatabase(undefined, true);
     }
-  };
+  }, [refreshDatabase]);
 
-  const handleResetVouchers = async (): Promise<{ cleared: number; error: string | null }> => {
+  const handleResetVouchers = useCallback(async (): Promise<{ cleared: number; error: string | null }> => {
     console.log('CLEAR ALL VOUCHERS STARTED');
     showToast("Resetting voucher inventory...", "info");
 
@@ -2740,14 +2863,14 @@ export default function App() {
 
     showToast("Voucher inventory reset to 0.", "success");
     return result;
-  };
+  }, [showToast]);
 
   useEffect(() => {
     (window as any).resetVoucherInventory = handleResetVouchers;
     (window as any).clearAllVouchers = handleResetVouchers;
-  }, []);
+  }, [handleResetVouchers]);
 
-  const handleClear = () => {
+  const handleClear = useCallback(() => {
     setFormData({
       title: "Patient & Visitor Concessions",
       site: "",
@@ -2762,38 +2885,39 @@ export default function App() {
       email: "",
       todayDate: ""
     });
-  };
+  }, []);
 
-  const handleHeaderSend = async () => {
-    if (!formData.vrm) {
+  const handleHeaderSend = useCallback(async () => {
+    if (!formDataRef.current.vrm) {
       showToast("Select a permit record first.", "warning");
       return;
     }
     await permitCardRef.current?.send();
-  };
+  }, [showToast]);
 
-  const handleBulkEmail = async () => {
+  const handleBulkEmail = useCallback(async () => {
     await permitCardRef.current?.bulkEmail();
-  };
+  }, []);
 
-  const handleHeaderPrint = () => {
-    if (!formData.vrm) {
+  const handleHeaderPrint = useCallback(() => {
+    if (!formDataRef.current.vrm) {
       showToast("Select a permit record first.", "warning");
       return;
     }
     permitCardRef.current?.print();
-  };
+  }, [showToast]);
 
-  const handleResendRecord = async (record: CsvPermitRecord) => {
+  const handleResendRecord = useCallback(async (record: CsvPermitRecord) => {
     // 1. Identify or generate genuine new voucher code
-    let newVoucherCode = (record.replacementCode || (isRecordMatch(record, formData) ? formData.replacementCode : "") || "").trim().toUpperCase();
+    const currentForm = formDataRef.current;
+    let newVoucherCode = (record.replacementCode || (isRecordMatch(record, currentForm) ? currentForm.replacementCode : "") || "").trim().toUpperCase();
     if (!newVoucherCode || newVoucherCode === "-" || newVoucherCode === "CANCELLED" || newVoucherCode === "PENDING") {
       // Find an unused voucher in vouchersDatabase
-      const availableUnused = (vouchersDatabase || []).find(v => {
+      const availableUnused = (vouchersDatabaseRef.current || []).find(v => {
         if (!v || !v.code || v.isUsed) return false;
         const clean = cleanVoucherCodeValue(v.code).toUpperCase();
         if (!clean || clean === "-" || clean === "CANCELLED" || clean === "PENDING") return false;
-        const inUse = (database || []).some(r => !isRecordMatch(r, record) && isVoucherCodeMatch(r.voucherCode, clean));
+        const inUse = (databaseRef.current || []).some(r => !isRecordMatch(r, record) && isVoucherCodeMatch(r.voucherCode, clean));
         return !inUse;
       });
 
@@ -2833,7 +2957,7 @@ export default function App() {
           requestedCode: newVoucherCode,
           validFrom: record.validFrom || record.dateRequired,
           validTo: record.validTo,
-          todayDate: record.todayDate || formData.todayDate || getTodayISO()
+          todayDate: record.todayDate || currentForm.todayDate || getTodayISO()
         })
       });
       if (res.ok) {
@@ -2928,15 +3052,16 @@ export default function App() {
     }
 
     showToast(`✅ Replacement permit resent with new code ${newVoucherCode}. Status updated to SENT.`, "success");
-  };
+  }, [markAsDispatched, handleSelectRecord, showToast]);
 
-  const handleDispatchRecord = async (record: CsvPermitRecord) => {
+  const handleDispatchRecord = useCallback(async (record: CsvPermitRecord) => {
+    const currentForm = formDataRef.current;
     const isRep = Boolean(
       record.replacementCode ||
       record.emailType === "RESEND_CONCESSION" ||
       record.isResend ||
       record.emailTemplate === "replacement" ||
-      (isRecordMatch(record, formData) && (formData.isResend || formData.replacementCode || formData.emailType === "RESEND_CONCESSION"))
+      (isRecordMatch(record, currentForm) && (currentForm.isResend || currentForm.replacementCode || currentForm.emailType === "RESEND_CONCESSION"))
     );
     if (isRep) {
       return handleResendRecord(record);
@@ -2950,16 +3075,28 @@ export default function App() {
     } else {
       await markAsDispatched(record.vrm, record.email, record);
     }
-  };
+  }, [handleResendRecord, handleSelectRecord, markAsDispatched]);
 
-  const handleUnsendRecord = async (record: CsvPermitRecord) => {
+  const handleUnsendRecord = useCallback(async (record: CsvPermitRecord) => {
     handleSelectRecord(record);
     if (permitCardRef.current?.unsend) {
       await permitCardRef.current.unsend(record);
     } else {
       await unmarkAsDispatched(record.vrm, record.email, record);
     }
-  };
+  }, [handleSelectRecord, unmarkAsDispatched]);
+
+  const handleBrowseConcessions = useCallback(() => {
+    csvPanelRef.current?.browseConcessions();
+  }, []);
+
+  const handleBrowseVouchers = useCallback(() => {
+    csvPanelRef.current?.browseVouchers();
+  }, []);
+
+  const handleOpenBlocklist = useCallback(() => {
+    setShowBlocklist(true);
+  }, []);
 
   const dispatchedCount = useMemo(() => {
     return enrichedDatabase.filter(record => 
@@ -2981,12 +3118,10 @@ export default function App() {
         darkMode={darkMode}
         onToggleDarkMode={() => setDarkMode(!darkMode)}
         activeTab={activeTab}
-        onActiveTabChange={(tab) => {
-          setActiveTab(tab);
-        }}
+        onActiveTabChange={setActiveTab}
         onExportExcel={handleExportExcel}
         onCleanDatabase={handleCleanDatabase}
-        onOpenBlocklist={() => setShowBlocklist(true)}
+        onOpenBlocklist={handleOpenBlocklist}
         storageMode={storageMode}
         onToggleStorageMode={handleToggleStorageMode}
         isSyncing={isSyncing}
@@ -3045,8 +3180,8 @@ export default function App() {
             dateRangeFilter={dateRangeFilter}
             onDateRangeFilterChange={handleDateRangeFilterChange}
             isLoadingHistory={isLoadingHistory}
-            onBrowseConcessions={() => csvPanelRef.current?.browseConcessions()}
-            onBrowseVouchers={() => csvPanelRef.current?.browseVouchers()}
+            onBrowseConcessions={handleBrowseConcessions}
+            onBrowseVouchers={handleBrowseVouchers}
             onResetVouchers={handleResetVouchers}
             onEditRecord={handleEditRecord}
             onPreviewRecord={handlePreviewRecord}

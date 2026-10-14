@@ -31,7 +31,7 @@ interface BlocklistPanelProps {
   database?: CsvPermitRecord[];
 }
 
-export function BlocklistPanel({ isOpen, onClose, database = [] }: BlocklistPanelProps) {
+function BlocklistPanelComponent({ isOpen, onClose, database = [] }: BlocklistPanelProps) {
   const [items, setItems] = useState<BlocklistItem[]>(() => getBlocklist());
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [showAddForm, setShowAddForm] = useState<boolean>(false);
@@ -510,3 +510,4 @@ export function BlocklistPanel({ isOpen, onClose, database = [] }: BlocklistPane
     </div>
   );
 }
+export const BlocklistPanel = React.memo(BlocklistPanelComponent);

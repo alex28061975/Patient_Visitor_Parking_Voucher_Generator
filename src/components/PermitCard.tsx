@@ -3265,5 +3265,5 @@ function PermitCardInner({
   );
 }
 
-export const PermitCard = forwardRef<PermitCardHandle, PermitCardProps>(PermitCardInner);
+export const PermitCard = React.memo(forwardRef<PermitCardHandle, PermitCardProps>(PermitCardInner));
 PermitCard.displayName = "PermitCard";

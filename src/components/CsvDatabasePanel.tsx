@@ -84,7 +84,7 @@ export interface CsvDatabasePanelHandle {
   browseVouchers: () => void;
 }
 
-export const CsvDatabasePanel = forwardRef<CsvDatabasePanelHandle, CsvDatabasePanelProps>(function CsvDatabasePanel({ 
+export const CsvDatabasePanel = React.memo(forwardRef<CsvDatabasePanelHandle, CsvDatabasePanelProps>(function CsvDatabasePanel({ 
   database, 
   totalRecordsCount,
   onDatabaseChange, 
@@ -569,4 +569,4 @@ export const CsvDatabasePanel = forwardRef<CsvDatabasePanelHandle, CsvDatabasePa
     </aside>
   );
 
-});
+}));

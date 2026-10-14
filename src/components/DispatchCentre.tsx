@@ -67,6 +67,7 @@ import {
   getVoucherValidFromISO,
   getVoucherValidToISO,
   normalizeDateToISO,
+  addDaysISO,
   computeVoucherBatchExpiryBadge
 } from "../utils/voucherValidation";
 
@@ -139,7 +140,7 @@ export type SortKey =
 
 export type SortDirection = "asc" | "desc" | null;
 
-export function DispatchCentre({ 
+function DispatchCentreComponent({ 
   database, 
   vouchersDatabase, 
   dispatchedKeys, 
@@ -447,8 +448,12 @@ export function DispatchCentre({
       });
     }
 
-    // 2. Include database records
+    // 2. Include database records and index by ID/formId for O(1) customVouchers lookup
+    const dbRecordByIdMap = new Map<string, CsvPermitRecord>();
     (database || []).forEach(rec => {
+      if (rec.formId !== undefined && rec.formId !== null) dbRecordByIdMap.set(String(rec.formId), rec);
+      if (rec.id !== undefined && rec.id !== null) dbRecordByIdMap.set(String(rec.id), rec);
+
       // Cancelled or blocked permits MUST NOT consume a voucher - they release their codes back to inventory
       const isBlocked = isVrmSilentBlockedSync(rec.vrm);
       const isCancelled = recordCancellationMap.has(rec)
@@ -496,18 +501,19 @@ export function DispatchCentre({
       }
     });
 
-    // 3. Include customVouchers
+    // 3. Include customVouchers (using O(1) indexed lookup)
     if (customVouchers) {
       Object.entries(customVouchers).forEach(([key, raw]) => {
         if (raw && typeof raw === "string") {
           const clean = cleanVoucherCodeValue(raw).toUpperCase();
           if (clean && clean !== "-" && clean !== "CANCELLED" && clean !== "PENDING" && clean !== "N/A" && clean !== "BLOCKED") {
-            const matchingRec = (database || []).find(r => 
-              String(r.formId) === key || String(r.id) === key
-            );
+            const matchingRec = dbRecordByIdMap.get(key);
             if (matchingRec) {
               const reqDate = getRequestedPermitDateISO(matchingRec, processingDate);
-              if (isVrmSilentBlockedSync(matchingRec.vrm) || isRecordCancelled(matchingRec, reqDate, database)) {
+              const isCancelled = recordCancellationMap.has(matchingRec)
+                ? recordCancellationMap.get(matchingRec)!
+                : isRecordCancelled(matchingRec, reqDate, database);
+              if (isVrmSilentBlockedSync(matchingRec.vrm) || isCancelled) {
                 return;
               }
             }
@@ -603,11 +609,59 @@ export function DispatchCentre({
     return "";
   }, [activeRecord, formData?.validTo, currentPermitValidFromIso]);
 
+  // ⭐ Pre-index vouchersDatabase by voucher code and validity period for O(1) lookups
+  const voucherIndex = useMemo(() => {
+    const codeMap = new Map<string, ParsedVoucherData[]>();
+    const periodMap = new Map<string, ParsedVoucherData[]>();
+    const undatedList: ParsedVoucherData[] = [];
+
+    (vouchersDatabase || []).forEach(v => {
+      if (!v || !v.code) return;
+      const clean = cleanVoucherCodeValue(v.code).toUpperCase();
+      if (!clean) return;
+
+      let cList = codeMap.get(clean);
+      if (!cList) {
+        cList = [];
+        codeMap.set(clean, cList);
+      }
+      cList.push(v);
+
+      if (clean === "-" || clean === "CANCELLED" || clean === "PENDING" || clean === "BLOCKED") return;
+
+      const vFrom = getVoucherValidFromISO(v);
+      const vTo = getVoucherValidToISO(v);
+      if (vFrom && vTo) {
+        const key = `${vFrom}_${vTo}`;
+        let pList = periodMap.get(key);
+        if (!pList) {
+          pList = [];
+          periodMap.set(key, pList);
+        }
+        pList.push(v);
+      } else {
+        undatedList.push(v);
+      }
+    });
+
+    const getVouchersForDateRange = (permitFromISO: string, permitToISO?: string): ParsedVoucherData[] => {
+      if (!permitFromISO) return [];
+      const normFrom = normalizeDateToISO(permitFromISO);
+      if (!normFrom) return [];
+      const normTo = permitToISO ? normalizeDateToISO(permitToISO) : addDaysISO(normFrom, 6);
+      const exact = periodMap.get(`${normFrom}_${normTo}`) || [];
+      if (undatedList.length === 0) return exact;
+      return [...exact, ...undatedList.filter(v => isVoucherForPermitDateRange(v, normFrom, normTo))];
+    };
+
+    return { codeMap, periodMap, undatedList, getVouchersForDateRange };
+  }, [vouchersDatabase]);
+
   // Helper to check if a voucher matches the permit's validity period
   const hasDatedVouchersForDate = useMemo(() => {
     if (!vouchersDatabase || vouchersDatabase.length === 0 || !currentPermitValidFromIso) return false;
-    return vouchersDatabase.some(v => isVoucherForPermitDateRange(v, currentPermitValidFromIso, currentPermitValidToIso));
-  }, [vouchersDatabase, currentPermitValidFromIso, currentPermitValidToIso]);
+    return voucherIndex.getVouchersForDateRange(currentPermitValidFromIso, currentPermitValidToIso).length > 0;
+  }, [voucherIndex, vouchersDatabase, currentPermitValidFromIso, currentPermitValidToIso]);
 
   const isVoucherMatchingPeriod = useCallback((v: ParsedVoucherData | undefined | null): boolean => {
     return isVoucherForPermitDateRange(v, currentPermitValidFromIso, currentPermitValidToIso);
@@ -623,9 +677,7 @@ export function DispatchCentre({
     const validTo = currentPermitValidToIso || currentPermitValidFromIso;
 
     // Filter vouchers that strictly match the current selected permit's date range (ValidFrom - ValidTo)
-    const matchingRangeVouchers = vouchersDatabase.filter(v => {
-      return isVoucherForPermitDateRange(v, currentPermitValidFromIso, validTo);
-    });
+    const matchingRangeVouchers = voucherIndex.getVouchersForDateRange(currentPermitValidFromIso, validTo);
 
     return matchingRangeVouchers.filter(v => {
       // ❌ Exclude used/dispatched codes
@@ -644,6 +696,7 @@ export function DispatchCentre({
       return true;
     });
   }, [
+    voucherIndex,
     vouchersDatabase,
     currentPermitValidFromIso,
     currentPermitValidToIso,
@@ -656,8 +709,8 @@ export function DispatchCentre({
       return 0;
     }
     const validTo = currentPermitValidToIso || currentPermitValidFromIso;
-    return vouchersDatabase.filter(v => isVoucherForPermitDateRange(v, currentPermitValidFromIso, validTo)).length;
-  }, [vouchersDatabase, currentPermitValidFromIso, currentPermitValidToIso]);
+    return voucherIndex.getVouchersForDateRange(currentPermitValidFromIso, validTo).length;
+  }, [voucherIndex, vouchersDatabase, currentPermitValidFromIso, currentPermitValidToIso]);
 
   const remainingForThisRange = unusedVouchersForDay.length;
   const percentRemaining = totalForThisRange > 0
@@ -912,26 +965,6 @@ export function DispatchCentre({
     return "PENDING";
   };
 
-  // ⭐ Pre-index vouchersDatabase for O(1) table row lookups
-  const voucherIndex = useMemo(() => {
-    const codeMap = new Map<string, ParsedVoucherData[]>();
-
-    (vouchersDatabase || []).forEach(v => {
-      if (!v || !v.code) return;
-      const clean = cleanVoucherCodeValue(v.code).toUpperCase();
-      if (!clean) return;
-
-      let cList = codeMap.get(clean);
-      if (!cList) {
-        cList = [];
-        codeMap.set(clean, cList);
-      }
-      cList.push(v);
-    });
-
-    return { codeMap };
-  }, [vouchersDatabase]);
-
   // Dynamic stock cache keyed by date range, automatically invalidated when assigned codes or vouchers change
   const rowVoucherStatsCache = useMemo(() => {
     return new Map<string, { total: number; remaining: number }>();
@@ -947,12 +980,13 @@ export function DispatchCentre({
     const cached = rowVoucherStatsCache.get(cacheKey);
     if (cached) return cached;
 
-    const matchingRangeVouchers = vouchersDatabase.filter(v => {
-      const dateMatch = isVoucherForPermitDateRange(v, permitFromISO, validTo);
-      if (!dateMatch) return false;
-      const vVrmClean = (v.vrm || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-      return !vVrmClean || vVrmClean === recordVrmClean;
-    });
+    const rangeVouchers = voucherIndex.getVouchersForDateRange(permitFromISO, validTo);
+    const matchingRangeVouchers = recordVrmClean
+      ? rangeVouchers.filter(v => {
+          const vVrmClean = (v.vrm || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+          return !vVrmClean || vVrmClean === recordVrmClean;
+        })
+      : rangeVouchers;
 
     const total = matchingRangeVouchers.length;
     let remaining = 0;
@@ -968,7 +1002,7 @@ export function DispatchCentre({
     const result = { total, remaining };
     rowVoucherStatsCache.set(cacheKey, result);
     return result;
-  }, [rowVoucherStatsCache, vouchersDatabase, assignedVoucherCodesSet]);
+  }, [rowVoucherStatsCache, voucherIndex, vouchersDatabase, assignedVoucherCodesSet]);
 
   const todayISO = useMemo(() => getTodayISO(), []);
 
@@ -1077,6 +1111,9 @@ export function DispatchCentre({
     pageSize
   ]);
 
+  // Stable key for replacement status in formData to avoid refiltering on unrelated form edits
+  const formDataReplacementKey = `${formData?.id || formData?.formId || formData?.vrm || ''}_${formData?.replacementCode || ''}_${formData?.emailType || ''}_${formData?.isResend || ''}_${formData?.emailTemplate || ''}`;
+
   // ⭐ STEP 1: Filter first in O(N) linear scan
   const filteredRecords = useMemo(() => {
     return baseRecords.filter((record, idx) => {
@@ -1171,7 +1208,7 @@ export function DispatchCentre({
     recordTimestampMap,
     dispatchedKeys,
     unsentKeys,
-    formData
+    formDataReplacementKey
   ]);
 
   // ⭐ STEP 2: Sort filtered records using pre-decorated keys in O(M log M) without indexOf
@@ -2423,3 +2460,5 @@ export function DispatchCentre({
     </section>
   );
 }
+
+export const DispatchCentre = React.memo(DispatchCentreComponent);

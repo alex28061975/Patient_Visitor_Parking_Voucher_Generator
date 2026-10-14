@@ -25,7 +25,7 @@ interface EditRecordModalProps {
   onChangeFormData?: (updates: any) => void;
 }
 
-export function EditRecordModal({
+function EditRecordModalComponent({
   isOpen,
   record,
   database,
@@ -769,3 +769,5 @@ export function EditRecordModal({
     </div>
   );
 }
+
+export const EditRecordModal = React.memo(EditRecordModalComponent);
