@@ -931,19 +931,22 @@ function DispatchCentreComponent({
     if (recordCancellationMap.has(record)) {
       return recordCancellationMap.get(record)!;
     }
-    if (record.isCancelled === true) return true;
-    if (typeof record.status === "string" && record.status.trim().toLowerCase().includes("cancel")) return true;
-    if (record.isCancelled === false && String(record.status || "").trim().toUpperCase() === "ACTIVE") {
-      // Explicitly active record: do not let stale CANCELLED string in voucherCode override active status
-    } else if (
-      record.voucherCode === "CANCELLED" ||
-      record.voucherCodesText === "CANCELLED" ||
-      record.prePaidCode === "CANCELLED" ||
-      (typeof record.voucherCode === "string" && record.voucherCode.trim().toUpperCase() === "CANCELLED") ||
-      (typeof record.voucherCodesText === "string" && record.voucherCodesText.trim().toUpperCase() === "CANCELLED") ||
-      (typeof record.prePaidCode === "string" && record.prePaidCode.trim().toUpperCase() === "CANCELLED")
-    ) {
-      return true;
+    if (record.cancellationReason === "MANUAL" || record.cancellationReason === "BLOCKLIST") return true;
+    if (record.cancellationReason !== "DUPLICATE_VRM") {
+      if (record.isCancelled === true) return true;
+      if (typeof record.status === "string" && record.status.trim().toLowerCase().includes("cancel")) return true;
+      if (record.isCancelled === false && String(record.status || "").trim().toUpperCase() === "ACTIVE") {
+        // Explicitly active record: do not let stale CANCELLED string in voucherCode override active status
+      } else if (
+        record.voucherCode === "CANCELLED" ||
+        record.voucherCodesText === "CANCELLED" ||
+        record.prePaidCode === "CANCELLED" ||
+        (typeof record.voucherCode === "string" && record.voucherCode.trim().toUpperCase() === "CANCELLED") ||
+        (typeof record.voucherCodesText === "string" && record.voucherCodesText.trim().toUpperCase() === "CANCELLED") ||
+        (typeof record.prePaidCode === "string" && record.prePaidCode.trim().toUpperCase() === "CANCELLED")
+      ) {
+        return true;
+      }
     }
     const reqDate = getRequestedPermitDateISO(record, processingDate);
     return isRecordCancelled(record, reqDate, database);

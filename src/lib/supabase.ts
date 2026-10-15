@@ -196,7 +196,17 @@ export interface SupabasePermit {
   start_time?: string;
   completion_time?: string;  // ✅ Column C from Excel
   created_at?: string;
+  cancellation_reason?: string | null;
 }
+
+let cancellationColumnAvailable: boolean | null = null;
+const isMissingCancellationColumnError = (err: any) => String(err?.message || err || '').toLowerCase().includes('cancellation_reason');
+const PERMIT_SELECT_BASE = 'id, hospital, ward, date_required, date_expiry, vrm, driver_name, phone, email, voucher_code, start_time, completion_time, created_at';
+const PERMIT_SELECT_WITH_REASON = PERMIT_SELECT_BASE + ', cancellation_reason';
+const cancellationReasonForDb = (r: { cancellationReason?: string; isCancelled?: boolean; status?: string; voucherCode?: string }): string | null => {
+  const cancelled = r.isCancelled === true || String(r.status || '').trim().toUpperCase() === 'CANCELLED' || String(r.voucherCode || '').trim().toUpperCase() === 'CANCELLED';
+  return cancelled && r.cancellationReason ? String(r.cancellationReason) : null;
+};
 
 export const fetchPermitsFromSupabase = async (options?: { daysLimit?: number | null }): Promise<CsvPermitRecord[] | null> => {
   const client = getSupabaseClient();
@@ -224,9 +234,10 @@ export const fetchPermitsFromSupabase = async (options?: { daysLimit?: number | 
       const from = page * pageSize;
       const to = from + pageSize - 1;
 
+      const selectCols = cancellationColumnAvailable === false ? PERMIT_SELECT_BASE : PERMIT_SELECT_WITH_REASON;
       let query = client
         .from('permits')
-        .select('id, hospital, ward, date_required, date_expiry, vrm, driver_name, phone, email, voucher_code, start_time, completion_time, created_at')  // ✅ Includes completion_time
+        .select(selectCols)
         .range(from, to)
         .order('created_at', { ascending: false });
 
@@ -234,15 +245,34 @@ export const fetchPermitsFromSupabase = async (options?: { daysLimit?: number | 
         query = query.gte('created_at', cutoffISO);
       }
 
-      const { data, error } = await query;
+      let { data, error }: { data: any; error: any } = await query;
+
+      if (error && cancellationColumnAvailable === null && isMissingCancellationColumnError(error)) {
+        cancellationColumnAvailable = false;
+        let retryQuery = client
+          .from('permits')
+          .select(PERMIT_SELECT_BASE)
+          .range(from, to)
+          .order('created_at', { ascending: false });
+        if (cutoffISO) {
+          retryQuery = retryQuery.gte('created_at', cutoffISO);
+        }
+        const retryRes: any = await retryQuery;
+        data = retryRes.data;
+        error = retryRes.error;
+      }
 
       if (error) {
         console.warn('Supabase fetch permits error:', error.message);
         break;
       }
 
+      if (cancellationColumnAvailable === null && !error) {
+        cancellationColumnAvailable = true;
+      }
+
       if (data && data.length > 0) {
-        allData = allData.concat(data as SupabasePermit[]);
+        allData = allData.concat(data as unknown as SupabasePermit[]);
         if (data.length < pageSize) {
           hasMore = false;
         } else {
@@ -272,6 +302,7 @@ export const fetchPermitsFromSupabase = async (options?: { daysLimit?: number | 
       completionTime: item.completion_time || undefined,  // ✅ Map completion_time from Supabase
       createdAt: item.created_at || undefined,
       created_at: item.created_at || undefined,
+      cancellationReason: item.cancellation_reason || undefined,
     }));
 
     if (daysLimit && daysLimit > 0) {
@@ -335,7 +366,7 @@ export const syncPermitsToSupabase = async (records: CsvPermitRecord[], replaceA
     if (records.length === 0) return true;
 
     // Upsert payload with completion_time
-    const payload = records.map(r => ({
+    const basePayload = records.map(r => ({
       id: r.id,
       hospital: r.hospital || '',
       ward: r.ward || '',
@@ -348,17 +379,30 @@ export const syncPermitsToSupabase = async (records: CsvPermitRecord[], replaceA
       voucher_code: r.voucherCode || null,
       start_time: r.startTime || null,
       completion_time: r.completionTime || null,  // ✅ Sync completion_time to Supabase
+      cancellation_reason: cancellationReasonForDb(r),
     }));
 
     const BATCH_SIZE = 400;
     let success = true;
-    for (let i = 0; i < payload.length; i += BATCH_SIZE) {
-      const chunk = payload.slice(i, i + BATCH_SIZE);
-      const { error } = await client.from('permits').upsert(chunk, { onConflict: 'id' });
+    for (let i = 0; i < basePayload.length; i += BATCH_SIZE) {
+      let chunk: any[] = basePayload.slice(i, i + BATCH_SIZE);
+      if (cancellationColumnAvailable === false) {
+        chunk = chunk.map(({ cancellation_reason, ...rest }) => rest);
+      }
+      let { error } = await client.from('permits').upsert(chunk, { onConflict: 'id' });
+      if (error && cancellationColumnAvailable !== false && isMissingCancellationColumnError(error)) {
+        cancellationColumnAvailable = false;
+        const retryChunk = chunk.map(({ cancellation_reason, ...rest }) => rest);
+        const retryRes = await client.from('permits').upsert(retryChunk, { onConflict: 'id' });
+        error = retryRes.error;
+      }
       if (error) {
         console.warn(`Supabase sync permits error on batch starting at index ${i}:`, error.message);
         success = false;
       }
+    }
+    if (success && cancellationColumnAvailable === null) {
+      cancellationColumnAvailable = true;
     }
     return success;
   } catch (err) {
@@ -398,7 +442,7 @@ export const updatePermitInSupabase = async (record: CsvPermitRecord): Promise<b
     return false;
   }
 
-  const payload = {
+  const basePayload = {
     id: permitId,
     hospital: record.hospital || (record as any).site || '',
     ward: record.ward || '',
@@ -411,10 +455,26 @@ export const updatePermitInSupabase = async (record: CsvPermitRecord): Promise<b
     voucher_code: record.voucherCode || (record as any).prePaidCode || null,
     start_time: record.startTime || null,
     completion_time: record.completionTime || null,
+    cancellation_reason: cancellationReasonForDb(record),
+  };
+
+  const getPayloadForDb = () => {
+    if (cancellationColumnAvailable === false) {
+      const { cancellation_reason, ...rest } = basePayload;
+      return rest;
+    }
+    return basePayload;
   };
 
   try {
-    const { error } = await client.from('permits').upsert(payload, { onConflict: 'id' });
+    let payload = getPayloadForDb();
+    let { error } = await client.from('permits').upsert(payload, { onConflict: 'id' });
+    if (error && cancellationColumnAvailable !== false && isMissingCancellationColumnError(error)) {
+      cancellationColumnAvailable = false;
+      payload = getPayloadForDb();
+      const retryRes = await client.from('permits').upsert(payload, { onConflict: 'id' });
+      error = retryRes.error;
+    }
     if (error) {
       console.warn(`Supabase client update permit error for id ${permitId}:`, error.message);
       // Attempt server proxy fallback if client-side update encounters RLS or network issue
@@ -422,14 +482,20 @@ export const updatePermitInSupabase = async (record: CsvPermitRecord): Promise<b
         const res = await fetch('/api/permits/update', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+          body: JSON.stringify(getPayloadForDb())
         });
         if (res.ok) {
           const data = await res.json().catch(() => null);
-          if (data?.success) return true;
+          if (data?.success) {
+            if (cancellationColumnAvailable === null) cancellationColumnAvailable = true;
+            return true;
+          }
         }
       } catch (fallbackErr) {}
       return false;
+    }
+    if (cancellationColumnAvailable === null) {
+      cancellationColumnAvailable = true;
     }
     return true;
   } catch (err) {
@@ -438,11 +504,14 @@ export const updatePermitInSupabase = async (record: CsvPermitRecord): Promise<b
       const res = await fetch('/api/permits/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(getPayloadForDb())
       });
       if (res.ok) {
         const data = await res.json().catch(() => null);
-        if (data?.success) return true;
+        if (data?.success) {
+          if (cancellationColumnAvailable === null) cancellationColumnAvailable = true;
+          return true;
+        }
       }
     } catch (fallbackErr) {}
     return false;

@@ -2442,6 +2442,14 @@ export function isVoucherExactPeriodEligible(
 export function isRecordCancelledCanonical(record: any, todayDateOrReference?: string, database?: CsvPermitRecord[]): boolean {
   if (!record) return false;
   if (record.cancellationReason === "MANUAL" || record.cancellationReason === "BLOCKLIST") return true;
+  if (record.cancellationReason === "DUPLICATE_VRM") {
+    if (database && database.length > 0) {
+      const rawRefDate = todayDateOrReference || record.todayDate || record.processingDate;
+      const referenceDate = rawRefDate ? (parseDateToISO(String(rawRefDate)) || "") : "";
+      return checkIsBlockedDuplicate(record, database, referenceDate);
+    }
+    return false;
+  }
   if (isVrmSilentBlockedSync(record.vrm) || String(record.status || "").trim().toUpperCase() === "BLOCKED") return true;
 
   const rawRefDate = todayDateOrReference || record.todayDate || record.processingDate;

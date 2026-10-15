@@ -605,17 +605,20 @@ function PermitCardInner({
   }, [data.voucherCodesText, data.vrm, data.name, data.validFrom, data.id, data.formId, isCurrentDispatched, data.emailTemplate, data.emailType, data.isResend, data.status, data.isDispatched]);
 
   const isCancelled = useMemo(() => {
-    if (data.isCancelled === true) return true;
-    if (typeof data.status === "string" && data.status.trim().toLowerCase().includes("cancel")) return true;
-    if (
-      data.voucherCode === "CANCELLED" ||
-      data.voucherCodesText === "CANCELLED" ||
-      data.prePaidCode === "CANCELLED" ||
-      (typeof data.voucherCode === "string" && data.voucherCode.trim().toUpperCase() === "CANCELLED") ||
-      (typeof data.voucherCodesText === "string" && data.voucherCodesText.trim().toUpperCase() === "CANCELLED") ||
-      (typeof data.prePaidCode === "string" && data.prePaidCode.trim().toUpperCase() === "CANCELLED")
-    ) {
-      return true;
+    if (data.cancellationReason === "MANUAL" || data.cancellationReason === "BLOCKLIST") return true;
+    if (data.cancellationReason !== "DUPLICATE_VRM") {
+      if (data.isCancelled === true) return true;
+      if (typeof data.status === "string" && data.status.trim().toLowerCase().includes("cancel")) return true;
+      if (
+        data.voucherCode === "CANCELLED" ||
+        data.voucherCodesText === "CANCELLED" ||
+        data.prePaidCode === "CANCELLED" ||
+        (typeof data.voucherCode === "string" && data.voucherCode.trim().toUpperCase() === "CANCELLED") ||
+        (typeof data.voucherCodesText === "string" && data.voucherCodesText.trim().toUpperCase() === "CANCELLED") ||
+        (typeof data.prePaidCode === "string" && data.prePaidCode.trim().toUpperCase() === "CANCELLED")
+      ) {
+        return true;
+      }
     }
     const refSubDate = data.submissionDate || (data as any).completionTime || (data as any).startTime || (data as any).createdAt || data.todayDate;
     if (isDateRequiredOutsideValidWindow(data.validFrom || data.dateRequired, refSubDate)) {

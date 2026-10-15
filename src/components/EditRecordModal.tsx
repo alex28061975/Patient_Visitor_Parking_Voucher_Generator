@@ -210,15 +210,18 @@ function EditRecordModalComponent({
   // Check if record is cancelled using canonical helpers
   const isCancelled = useMemo(() => {
     if (!record) return false;
-    if (record.isCancelled === true) return true;
-    if (record.status && String(record.status).toLowerCase().includes("cancel")) return true;
-    if (record.isCancelled === false && String(record.status || "").trim().toUpperCase() === "ACTIVE") {
-      // Explicitly active
-    } else if (
-      record.voucherCode === "CANCELLED" ||
-      (record as any).prePaidCode === "CANCELLED" ||
-      (record as any).voucherCodesText === "CANCELLED"
-    ) return true;
+    if (record.cancellationReason === "MANUAL" || record.cancellationReason === "BLOCKLIST") return true;
+    if (record.cancellationReason !== "DUPLICATE_VRM") {
+      if (record.isCancelled === true) return true;
+      if (record.status && String(record.status).toLowerCase().includes("cancel")) return true;
+      if (record.isCancelled === false && String(record.status || "").trim().toUpperCase() === "ACTIVE") {
+        // Explicitly active
+      } else if (
+        record.voucherCode === "CANCELLED" ||
+        (record as any).prePaidCode === "CANCELLED" ||
+        (record as any).voucherCodesText === "CANCELLED"
+      ) return true;
+    }
     const reqDate = getRequestedPermitDateISO(record) || parseDateToISO(record.dateRequired || record.validFrom) || "";
     if (isRecordCancelled(record, reqDate, database)) return true;
     return false;
