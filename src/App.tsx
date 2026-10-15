@@ -161,7 +161,8 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
       const wasCancelled = entry.record.isCancelled === true ||
         String(entry.record.status || "").trim().toUpperCase() === "CANCELLED" ||
         entry.record.voucherCode === "CANCELLED" ||
-        entry.record.prePaidCode === "CANCELLED";
+        entry.record.prePaidCode === "CANCELLED" ||
+        entry.record.voucherCodesText === "CANCELLED";
 
       if (genuine) {
         const preservedVoucher = (entry.record.originalVoucherCode && entry.record.originalVoucherCode !== "CANCELLED" && entry.record.originalVoucherCode !== "-")
@@ -195,8 +196,9 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
           ...entry.record,
           isCancelled: false,
           status: "ACTIVE",
-          voucherCode: preservedVoucher || "",
-          prePaidCode: preservedVoucher || "",
+          voucherCode: preservedVoucher || (entry.record.voucherCode === "CANCELLED" ? "" : entry.record.voucherCode || ""),
+          prePaidCode: preservedVoucher || (entry.record.prePaidCode === "CANCELLED" ? "" : entry.record.prePaidCode || ""),
+          voucherCodesText: entry.record.voucherCodesText === "CANCELLED" ? (preservedVoucher || "") : (entry.record.voucherCodesText || preservedVoucher || ""),
           originalVoucherCode: preservedVoucher || entry.record.originalVoucherCode,
           cancellationReason: undefined
         };
@@ -308,8 +310,9 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
         ...entry.record,
         isCancelled: false,
         status: "ACTIVE",
-        voucherCode: preservedVoucher || "",
-        prePaidCode: preservedVoucher || "",
+        voucherCode: preservedVoucher || (entry.record.voucherCode === "CANCELLED" ? "" : entry.record.voucherCode || ""),
+        prePaidCode: preservedVoucher || (entry.record.prePaidCode === "CANCELLED" ? "" : entry.record.prePaidCode || ""),
+        voucherCodesText: entry.record.voucherCodesText === "CANCELLED" ? (preservedVoucher || "") : (entry.record.voucherCodesText || preservedVoucher || ""),
         originalVoucherCode: preservedVoucher || entry.record.originalVoucherCode,
         cancellationReason: undefined
       };
