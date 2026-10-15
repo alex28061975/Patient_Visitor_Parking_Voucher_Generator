@@ -83,6 +83,7 @@ interface PermitCardProps {
   onSelectRecord?: (record: CsvPermitRecord) => void;
   onChange?: (updates: Partial<PermitData>) => void;
   previewOnly?: boolean;
+  isOffscreen?: boolean;
 }
 
 // Exported status helpers for use across components (PermitCard, TableView, PermitForm)
@@ -146,7 +147,8 @@ function PermitCardInner({
   unmarkAsDispatched,
   onSelectRecord, 
   onChange,
-  previewOnly = false
+  previewOnly = false,
+  isOffscreen = false
 }: PermitCardProps, ref: React.ForwardedRef<PermitCardHandle>) {
   const [qrUrl, setQrUrl] = useState<string>("");
   const [qrUrlSmall, setQrUrlSmall] = useState<string>("");
@@ -162,6 +164,7 @@ function PermitCardInner({
   const [showPendingModal, setShowPendingModal] = useState<boolean>(false);
 
   useEffect(() => {
+    if (isOffscreen || !showPendingModal) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape" && showPendingModal) {
         setShowPendingModal(false);
@@ -169,9 +172,10 @@ function PermitCardInner({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [showPendingModal]);
+  }, [isOffscreen, showPendingModal]);
 
   useEffect(() => {
+    if (isOffscreen) return;
     let active = true;
     const checkBlocked = async () => {
       if (!data.vrm) {
@@ -197,7 +201,7 @@ function PermitCardInner({
       active = false;
       window.removeEventListener("blocklist_updated", handleStorageUpdate);
     };
-  }, [data.vrm]);
+  }, [isOffscreen, data.vrm]);
 
   // Target ISO for the permit being viewed
   const targetIso = useMemo(() => {
@@ -224,7 +228,7 @@ function PermitCardInner({
   // 1. unusedVouchersForDay: Filters vouchers to only unused codes matching the target ISO date
   // =========================================================================
   const unusedVouchersForDay = useMemo<ParsedVoucherData[]>(() => {
-    if (!targetIso) return [];
+    if (isOffscreen || !targetIso) return [];
 
     const vouchers = getUnusedVouchersForDate(
       vouchersDatabase, 
@@ -249,6 +253,7 @@ function PermitCardInner({
       return !spreadsheetAssignedCodes.has(codeUpper);
     });
   }, [
+    isOffscreen,
     vouchersDatabase, 
     database, 
     matchingPermits,
@@ -427,6 +432,7 @@ function PermitCardInner({
 
   // ⭐ Pre-calculate record cancellation statuses once per dataset update
   const recordCancellationStatus = useMemo(() => {
+    if (isOffscreen) return new WeakMap<object, boolean>();
     const records = (database && database.length > 0) ? database : matchingPermits;
     const cancelledMap = new WeakMap<object, boolean>();
     records.forEach(p => {
@@ -444,9 +450,10 @@ function PermitCardInner({
       cancelledMap.set(p, recCancelled);
     });
     return cancelledMap;
-  }, [database, matchingPermits, data.todayDate]);
+  }, [isOffscreen, database, matchingPermits, data.todayDate]);
 
   const allPendingRecords = useMemo(() => {
+    if (isOffscreen || !showPendingModal) return [];
     const records = (database && database.length > 0) ? database : matchingPermits;
 
     return records.filter(p => {
@@ -456,9 +463,12 @@ function PermitCardInner({
 
       return !recCancelled && !isRecordDispatched(p);
     });
-  }, [database, matchingPermits, isRecordDispatched, recordCancellationStatus]);
+  }, [isOffscreen, showPendingModal, database, matchingPermits, isRecordDispatched, recordCancellationStatus]);
 
   const dbStats = useMemo(() => {
+    if (isOffscreen) {
+      return { sent: 0, pending: 0, expired: 0, cancelled: 0, processed: 0, total: 0, progressPct: 0, pendingPct: 0 };
+    }
     const sourceRecords = (database && database.length > 0) ? database : matchingPermits;
     // A permit can expose PRIMARY_/FORM_/numeric aliases. Deduplicate by its
     // canonical primary record key before calculating any metric.
@@ -499,7 +509,7 @@ function PermitCardInner({
     const pendingPct = total > 0 ? Math.max(0, 100 - progressPct) : 0;
 
     return { sent, pending, expired: 0, cancelled, processed, total, progressPct, pendingPct };
-  }, [database, matchingPermits, isRecordDispatched, recordCancellationStatus]);
+  }, [isOffscreen, database, matchingPermits, isRecordDispatched, recordCancellationStatus]);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastType, setToastType] = useState<string>("info");
@@ -1182,12 +1192,14 @@ function PermitCardInner({
   const [copyBodySuccess, setCopyBodySuccess] = useState<boolean>(false);
 
   useEffect(() => {
+    if (isOffscreen) return;
     safeLocalStorage.setItem("outlook_permit_last_recipient", recipientEmail);
-  }, [recipientEmail]);
+  }, [isOffscreen, recipientEmail]);
 
   useEffect(() => {
+    if (isOffscreen) return;
     safeLocalStorage.setItem("outlook_permit_client_type", outlookClientType);
-  }, [outlookClientType]);
+  }, [isOffscreen, outlookClientType]);
 
   useEffect(() => {
     setRecipientEmail((data.email || "").toLowerCase());
@@ -1320,8 +1332,8 @@ function PermitCardInner({
   // skip eager QR code generation on every record/database change.
   // Generation is performed on demand when print, send, copy, or beforeprint actions are triggered.
   useEffect(() => {
-    const isOffscreen = cardRef.current?.closest('.permit-card-engine') !== null;
-    if (isOffscreen) {
+    const isHiddenEngine = isOffscreen || cardRef.current?.closest('.permit-card-engine') !== null;
+    if (isHiddenEngine) {
       if (!qrPayload) {
         setQrUrl("");
         setQrUrlSmall("");
@@ -1336,7 +1348,7 @@ function PermitCardInner({
     }
 
     generateQrUrls(qrPayload);
-  }, [qrPayload, generateQrUrls]);
+  }, [isOffscreen, qrPayload, generateQrUrls]);
 
   // Hook beforeprint to guarantee QR is generated if browser print dialog opens
   useEffect(() => {
@@ -2403,6 +2415,7 @@ function PermitCardInner({
 
   // Keyboard shortcuts listener: Enter/Space to dispatch, Left/Right arrows to navigate
   useEffect(() => {
+    if (isOffscreen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       const activeElem = document.activeElement;
       if (
@@ -2439,7 +2452,7 @@ function PermitCardInner({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [matchingPermits, activeIndex, qrUrlSmall, isCurrentDispatched, onSelectRecord, handleSendWithOutlook]);
+  }, [isOffscreen, matchingPermits, activeIndex, qrUrlSmall, isCurrentDispatched, onSelectRecord, handleSendWithOutlook]);
 
   useImperativeHandle(ref, () => ({
     send: (record?: CsvPermitRecord, options?: { skipDispatch?: boolean }) => handleSendClick(record, options),

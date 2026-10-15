@@ -32,7 +32,7 @@ interface HeaderProps {
   onOutlook?: () => void;
 }
 
-export function Header({
+function HeaderInner({
   darkMode,
   onToggleDarkMode,
   onExportExcel,
@@ -263,3 +263,6 @@ export function Header({
     </header>
   );
 }
+
+export const Header = React.memo(HeaderInner);
+Header.displayName = "Header";

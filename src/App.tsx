@@ -691,6 +691,102 @@ const areRecordStringMapsEqual = (a: Record<string, string> | undefined, b: Reco
   return true;
 };
 
+interface HiddenPermitCardEngineProps {
+  cardRef: React.RefObject<PermitCardHandle | null>;
+  data: PermitData;
+  database: CsvPermitRecord[];
+  vouchersDatabase: ParsedVoucherData[];
+  dispatchedKeys: string[];
+  unsentKeys: string[];
+  dispatchBy: Record<string, string>;
+  markAsDispatched: (vrm?: string, email?: string, record?: CsvPermitRecord) => Promise<boolean>;
+  unmarkAsDispatched: (vrm?: string, email?: string, record?: CsvPermitRecord) => Promise<boolean>;
+  onSelectRecord: (record: CsvPermitRecord) => void;
+  onChange: (updates: Partial<PermitData>) => void;
+}
+
+const areHiddenPermitCardEnginePropsEqual = (
+  prevProps: HiddenPermitCardEngineProps,
+  nextProps: HiddenPermitCardEngineProps
+): boolean => {
+  if (prevProps.cardRef !== nextProps.cardRef) return false;
+  if (prevProps.database !== nextProps.database) return false;
+  if (prevProps.vouchersDatabase !== nextProps.vouchersDatabase) return false;
+  if (prevProps.markAsDispatched !== nextProps.markAsDispatched) return false;
+  if (prevProps.unmarkAsDispatched !== nextProps.unmarkAsDispatched) return false;
+  if (prevProps.onSelectRecord !== nextProps.onSelectRecord) return false;
+  if (prevProps.onChange !== nextProps.onChange) return false;
+
+  if (!areStringSetsEqual(prevProps.dispatchedKeys, nextProps.dispatchedKeys)) return false;
+  if (!areStringSetsEqual(prevProps.unsentKeys, nextProps.unsentKeys)) return false;
+  if (!areRecordStringMapsEqual(prevProps.dispatchBy, nextProps.dispatchBy)) return false;
+
+  const p = prevProps.data;
+  const n = nextProps.data;
+  if (p === n) return true;
+  if (
+    p.id !== n.id ||
+    p.formId !== n.formId ||
+    p.vrm !== n.vrm ||
+    p.validFrom !== n.validFrom ||
+    p.validTo !== n.validTo ||
+    p.todayDate !== n.todayDate ||
+    p.voucherCodesText !== n.voucherCodesText ||
+    p.voucherCode !== n.voucherCode ||
+    p.email !== n.email ||
+    p.driverName !== n.driverName ||
+    p.name !== n.name ||
+    p.phone !== n.phone ||
+    p.replacementCode !== n.replacementCode ||
+    p.isResend !== n.isResend ||
+    p.emailType !== n.emailType ||
+    p.emailTemplate !== n.emailTemplate ||
+    p.status !== n.status ||
+    p.isCancelled !== n.isCancelled ||
+    p.cancellationReason !== n.cancellationReason ||
+    p.site !== n.site ||
+    p.ward !== n.ward ||
+    p.qrOverride !== n.qrOverride
+  ) {
+    return false;
+  }
+  return true;
+};
+
+const HiddenPermitCardEngine = React.memo(({
+  cardRef,
+  data,
+  database,
+  vouchersDatabase,
+  dispatchedKeys,
+  unsentKeys,
+  dispatchBy,
+  markAsDispatched,
+  unmarkAsDispatched,
+  onSelectRecord,
+  onChange,
+}: HiddenPermitCardEngineProps) => {
+  return (
+    <div id="print-card-wrapper" className="permit-card-engine" aria-hidden="true">
+      <PermitCard
+        ref={cardRef}
+        isOffscreen={true}
+        data={data}
+        database={database}
+        vouchersDatabase={vouchersDatabase}
+        dispatchedKeys={dispatchedKeys}
+        unsentKeys={unsentKeys}
+        dispatchBy={dispatchBy}
+        markAsDispatched={markAsDispatched}
+        unmarkAsDispatched={unmarkAsDispatched}
+        onSelectRecord={onSelectRecord}
+        onChange={onChange}
+      />
+    </div>
+  );
+}, areHiddenPermitCardEnginePropsEqual);
+HiddenPermitCardEngine.displayName = "HiddenPermitCardEngine";
+
 export default function App() {
   const [currentUserName] = useState<string>(() => safeLocalStorage.getItem("realtime_user_name") || "Colleague_" + Math.floor(1000 + Math.random() * 9000));
 
@@ -715,6 +811,8 @@ export default function App() {
       document.documentElement.classList.remove("dark");
     }
   }, [darkMode]);
+
+  const handleToggleDarkMode = useCallback(() => setDarkMode(prev => !prev), []);
 
   const todayStr = getTodayISO();
   const next7DaysStr = addDays(todayStr, 6);
@@ -1668,7 +1766,7 @@ export default function App() {
   }, []);
 
   // 🔥 Manual Sync Handler for Cloud Mode
-  const handleManualSync = async () => {
+  const handleManualSync = useCallback(async () => {
     if (storageModeRef.current !== "cloud") return;
     setIsSyncing(true);
     try {
@@ -1679,11 +1777,11 @@ export default function App() {
     } finally {
       setIsSyncing(false);
     }
-  };
+  }, [refreshDatabase, showToast]);
 
   // 🔥 Toggle Storage Mode (Cloud <-> Offline) with automatic sync on reconnect
-  const handleToggleStorageMode = async () => {
-    if (storageMode === "cloud") {
+  const handleToggleStorageMode = useCallback(async () => {
+    if (storageModeRef.current === "cloud") {
       // Switching from Cloud to Offline
       setStorageMode("offline");
       storageModeRef.current = "offline";
@@ -1776,17 +1874,17 @@ export default function App() {
         setIsSyncing(false);
       }
     }
-  };
+  }, [currentUserName, refreshDatabase, showToast]);
 
-  const handlePurgeCorruptedKeys = async () => {
+  const handlePurgeCorruptedKeys = useCallback(async () => {
     if (isSupabaseConfigured()) {
       const { count } = await cleanupCorruptedDispatchedKeys();
       console.log(`[Purge Keys] Cleaned ${count} corrupted collision keys`);
     }
     await refreshDatabase();
-  };
+  }, [refreshDatabase]);
 
-  const handleCleanDatabase = async () => {
+  const handleCleanDatabase = useCallback(async () => {
     showToast("Cleaning database...", "info");
     try {
       await handlePurgeCorruptedKeys();
@@ -1795,14 +1893,14 @@ export default function App() {
       console.warn("Failed to clean database:", e);
       showToast("Failed to clean database.", "error");
     }
-  };
+  }, [handlePurgeCorruptedKeys, showToast]);
 
   const handleDateRangeFilterChange = useCallback((newFilter: '7days' | '30days' | 'all') => {
     setDateRangeFilter(newFilter);
   }, []);
 
-  const handleExportExcel = async () => {
-    let recordsToExport = database;
+  const handleExportExcel = useCallback(async () => {
+    let recordsToExport = databaseRef.current || database;
     if (isSupabaseConfigured() && !hasFullHistoryLoaded) {
       setIsLoadingHistory(true);
       try {
@@ -1821,11 +1919,11 @@ export default function App() {
       }
     }
     try {
-      exportToExcel(recordsToExport, "Concessions_Permits_Export.xlsx", customVouchers, formData.todayDate || getTodayISO());
+      exportToExcel(recordsToExport, "Concessions_Permits_Export.xlsx", customVouchersRef.current || customVouchers, formDataRef.current?.todayDate || getTodayISO());
     } catch (e) {
       showToast("Export failed.", "error");
     }
-  };
+  }, [database, hasFullHistoryLoaded, customVouchers, showToast]);
 
   useEffect(() => {
     let unsubscribe: (() => void) | null = null;
@@ -2002,11 +2100,9 @@ export default function App() {
       database,
       vouchersDatabase,
       customVouchers,
-      formData.todayDate || getTodayISO(),
-      dispatchedKeys,
-      unsentKeys
+      formData.todayDate || getTodayISO()
     );
-  }, [database, vouchersDatabase, customVouchers, formData.todayDate, dispatchedKeys, unsentKeys]);
+  }, [database, vouchersDatabase, customVouchers, formData.todayDate]);
 
   const isManualSelectionRef = useRef(false);
   const isUserNavigationRef = useRef(false);
@@ -3116,7 +3212,7 @@ export default function App() {
 
       <Header
         darkMode={darkMode}
-        onToggleDarkMode={() => setDarkMode(!darkMode)}
+        onToggleDarkMode={handleToggleDarkMode}
         activeTab={activeTab}
         onActiveTabChange={setActiveTab}
         onExportExcel={handleExportExcel}
@@ -3187,21 +3283,19 @@ export default function App() {
             onPreviewRecord={handlePreviewRecord}
           />
 
-          <div id="print-card-wrapper" className="permit-card-engine" aria-hidden="true">
-            <PermitCard
-              ref={permitCardRef}
-              data={formData}
-              database={enrichedDatabase}
-              vouchersDatabase={vouchersDatabase}
-              dispatchedKeys={dispatchedKeys}
-              unsentKeys={unsentKeys}
-              dispatchBy={dispatchBy}
-              markAsDispatched={markAsDispatched}
-              unmarkAsDispatched={unmarkAsDispatched}
-              onSelectRecord={handleSelectRecord}
-              onChange={handleUpdate}
-            />
-          </div>
+          <HiddenPermitCardEngine
+            cardRef={permitCardRef}
+            data={formData}
+            database={enrichedDatabase}
+            vouchersDatabase={vouchersDatabase}
+            dispatchedKeys={dispatchedKeys}
+            unsentKeys={unsentKeys}
+            dispatchBy={dispatchBy}
+            markAsDispatched={markAsDispatched}
+            unmarkAsDispatched={unmarkAsDispatched}
+            onSelectRecord={handleSelectRecord}
+            onChange={handleUpdate}
+          />
         </main>
       )}
 

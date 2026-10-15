@@ -45,7 +45,6 @@ import {
   getTodayISO,
   formatSubmittedDateTime,
   getRecordSubmittedTimeMs,
-  getMatchingPermits,
   getUnusedVouchersForDate,
   getSpreadsheetMatchingAssignedCodes,
   getVoucherDateISO,
@@ -278,11 +277,6 @@ function DispatchCentreComponent({
     return getTodayISO();
   }, [formData?.validFrom, formData?.dateRequired, formData?.startTime, formData?.createdAt, formData?.todayDate, processingDate]);
 
-  // Matching permits for the active date
-  const matchingPermits = useMemo(() => {
-    if (!targetIso) return [];
-    return getMatchingPermits(database, targetIso);
-  }, [database, targetIso]);
 
   const [blocklistVersion, setBlocklistVersion] = useState<number>(0);
   useEffect(() => {
@@ -827,7 +821,7 @@ function DispatchCentreComponent({
   const [goToPageInput, setGoToPageInput] = useState<string>("");
   const tableContainerRef = useRef<HTMLDivElement>(null);
 
-  const isSameSelectedRecord = (record: CsvPermitRecord) => {
+  const isSameSelectedRecord = useCallback((record: CsvPermitRecord) => {
     if (selectedRowRecord) {
       return isRecordMatch(record, selectedRowRecord);
     }
@@ -835,9 +829,9 @@ function DispatchCentreComponent({
       return isRecordMatch(record, formData);
     }
     return false;
-  };
+  }, [selectedRowRecord, formData]);
 
-  const isReplacementPending = (record: CsvPermitRecord) => {
+  const isReplacementPending = useCallback((record: CsvPermitRecord) => {
     if (!record) return false;
     const isDisp = checkIsRecordDispatched(record, record.vrm, record.driverName, record.dateRequired, dispatchedKeys, unsentKeys);
     // If the record has been dispatched and doesn't have an unapplied new replacement code, it is NOT pending
@@ -871,9 +865,9 @@ function DispatchCentreComponent({
       return true;
     }
     return false;
-  };
+  }, [dispatchedKeys, unsentKeys, selectedRowRecord, formData]);
 
-  const getHospital = (record: CsvPermitRecord) => {
+  const getHospital = useCallback((record: CsvPermitRecord) => {
     const raw = String(record?.hospital ?? "").trim();
     if (raw && !raw.toLowerCase().includes("royal london")) {
       return raw;
@@ -884,7 +878,7 @@ function DispatchCentreComponent({
       ward.includes("acacia") || 
       ward.includes("mulberry")
     ) ? "Whipps Cross Hospital" : "Newham Hospital";
-  };
+  }, []);
 
   // Selected site/hospital resolution
   const selectedHospital = useMemo(() => {
@@ -932,7 +926,7 @@ function DispatchCentreComponent({
     selectedHospital
   ]);
 
-  const getIsCancelled = (record: CsvPermitRecord, idx?: number) => {
+  const getIsCancelled = useCallback((record: CsvPermitRecord, idx?: number) => {
     if (!record) return false;
     if (recordCancellationMap.has(record)) {
       return recordCancellationMap.get(record)!;
@@ -953,9 +947,9 @@ function DispatchCentreComponent({
     }
     const reqDate = getRequestedPermitDateISO(record, processingDate);
     return isRecordCancelled(record, reqDate, database);
-  };
+  }, [recordCancellationMap, processingDate, database]);
 
-  const getStatusStr = (record: CsvPermitRecord, idx?: number) => {
+  const getStatusStr = useCallback((record: CsvPermitRecord, idx?: number) => {
     if (!record) return "PENDING";
     if (isVrmSilentBlockedSync(record.vrm)) return "BLOCKED";
     if (getIsCancelled(record, idx)) return "CANCELLED";
@@ -963,7 +957,7 @@ function DispatchCentreComponent({
     if (isDispatched) return "SENT";
     if (isReplacementPending(record)) return "REPLACEMENT";
     return "PENDING";
-  };
+  }, [getIsCancelled, dispatchedKeys, unsentKeys, isReplacementPending]);
 
   // Dynamic stock cache keyed by date range, automatically invalidated when assigned codes or vouchers change
   const rowVoucherStatsCache = useMemo(() => {
@@ -1116,20 +1110,47 @@ function DispatchCentreComponent({
 
   // ⭐ STEP 1: Filter first in O(N) linear scan
   const filteredRecords = useMemo(() => {
+    const cleanSearchQuery = (searchQuery && searchQuery.trim()) ? searchQuery.trim().toLowerCase() : "";
+    const cleanHospitalFilter = hospitalFilter !== "ALL" ? hospitalFilter.toLowerCase().trim() : "";
+    const cleanWardFilter = wardFilter !== "ALL" ? wardFilter.toLowerCase() : "";
+
+    let dateRangeStart = 0;
+    let dateRangeEnd = 0;
+    let isDateFiltering = dateFilter !== "ALL";
+
+    if (isDateFiltering) {
+      if (dateFilter === "TODAY") {
+        dateRangeStart = localDateBounds.todayStartDate.getTime();
+        dateRangeEnd = localDateBounds.todayEndDate.getTime();
+      } else if (dateFilter === "THIS_WEEK") {
+        dateRangeStart = localDateBounds.thisWeekStartDate.getTime();
+        dateRangeEnd = localDateBounds.thisWeekEndDate.getTime();
+      } else if (dateFilter === "THIS_MONTH") {
+        dateRangeStart = localDateBounds.thisMonthStartDate.getTime();
+        dateRangeEnd = localDateBounds.thisMonthEndDate.getTime();
+      } else if (dateFilter === "CUSTOM") {
+        if (localDateBounds.customStartDateObj === null && localDateBounds.customEndDateObj === null) {
+          isDateFiltering = false;
+        } else {
+          dateRangeStart = localDateBounds.customStartDateObj ? localDateBounds.customStartDateObj.getTime() : 0;
+          dateRangeEnd = localDateBounds.customEndDateObj ? localDateBounds.customEndDateObj.getTime() : Number.MAX_SAFE_INTEGER;
+        }
+      }
+    }
+
     return baseRecords.filter((record, idx) => {
       if (!record) return false;
 
-      if (searchQuery && searchQuery.trim()) {
-        const q = searchQuery.trim().toLowerCase();
+      if (cleanSearchQuery) {
         const cleanFormId = String(record?.formId ?? record?.id ?? "");
         const matchesSearch = (
-          cleanFormId.toLowerCase().includes(q) ||
-          (record?.driverName || "").toLowerCase().includes(q) ||
-          (record?.vrm || "").toLowerCase().includes(q) ||
-          (record?.hospital || "").toLowerCase().includes(q) ||
-          (record?.ward || "").toLowerCase().includes(q) ||
-          (record?.email || "").toLowerCase().includes(q) ||
-          (record?.voucherCode || "").toLowerCase().includes(q)
+          cleanFormId.toLowerCase().includes(cleanSearchQuery) ||
+          (record?.driverName || "").toLowerCase().includes(cleanSearchQuery) ||
+          (record?.vrm || "").toLowerCase().includes(cleanSearchQuery) ||
+          (record?.hospital || "").toLowerCase().includes(cleanSearchQuery) ||
+          (record?.ward || "").toLowerCase().includes(cleanSearchQuery) ||
+          (record?.email || "").toLowerCase().includes(cleanSearchQuery) ||
+          (record?.voucherCode || "").toLowerCase().includes(cleanSearchQuery)
         );
         if (!matchesSearch) return false;
       }
@@ -1143,53 +1164,26 @@ function DispatchCentreComponent({
         if (statusFilter === "REPLACEMENT" && status !== "REPLACEMENT") return false;
       }
 
-      if (hospitalFilter !== "ALL") {
+      if (cleanHospitalFilter) {
         const hosp = getHospital(record);
-        if (hosp.toLowerCase().trim() !== hospitalFilter.toLowerCase().trim()) {
+        if (hosp.toLowerCase().trim() !== cleanHospitalFilter) {
           return false;
         }
       }
 
-      if (wardFilter !== "ALL") {
+      if (cleanWardFilter) {
         const w = (record?.ward || "").toLowerCase();
-        const target = wardFilter.toLowerCase();
-        if (!w.includes(target) && w !== target) {
+        if (!w.includes(cleanWardFilter) && w !== cleanWardFilter) {
           return false;
         }
       }
 
-      if (dateFilter !== "ALL") {
+      if (isDateFiltering) {
         const targetTs = recordTimestampMap.has(record) ? recordTimestampMap.get(record)! : null;
-        if (targetTs === null) {
+        if (targetTs === null || isNaN(targetTs)) {
           return false;
         }
-
-        const isTsInRange = (ts: number | null, startMs: number, endMs: number): boolean => {
-          if (ts === null || isNaN(ts)) return false;
-          return ts >= startMs && ts <= endMs;
-        };
-
-        let rangeStart = 0;
-        let rangeEnd = 0;
-
-        if (dateFilter === "TODAY") {
-          rangeStart = localDateBounds.todayStartDate.getTime();
-          rangeEnd = localDateBounds.todayEndDate.getTime();
-        } else if (dateFilter === "THIS_WEEK") {
-          rangeStart = localDateBounds.thisWeekStartDate.getTime();
-          rangeEnd = localDateBounds.thisWeekEndDate.getTime();
-        } else if (dateFilter === "THIS_MONTH") {
-          rangeStart = localDateBounds.thisMonthStartDate.getTime();
-          rangeEnd = localDateBounds.thisMonthEndDate.getTime();
-        } else if (dateFilter === "CUSTOM") {
-          if (localDateBounds.customStartDateObj === null && localDateBounds.customEndDateObj === null) {
-            return true;
-          }
-          rangeStart = localDateBounds.customStartDateObj ? localDateBounds.customStartDateObj.getTime() : 0;
-          rangeEnd = localDateBounds.customEndDateObj ? localDateBounds.customEndDateObj.getTime() : Number.MAX_SAFE_INTEGER;
-        }
-
-        if (!isTsInRange(targetTs, rangeStart, rangeEnd)) {
+        if (targetTs < dateRangeStart || targetTs > dateRangeEnd) {
           return false;
         }
       }
@@ -1304,7 +1298,7 @@ function DispatchCentreComponent({
     recordCodeMap,
     dispatchedKeys,
     unsentKeys,
-    formData
+    formDataReplacementKey
   ]);
 
   const handleSort = (key: SortKey) => {
