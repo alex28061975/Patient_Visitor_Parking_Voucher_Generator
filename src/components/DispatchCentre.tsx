@@ -1535,7 +1535,7 @@ function DispatchCentreComponent({
 
   const handleExportZip = () => {
     try {
-      exportToExcel(filteredRecords, "Concessions_Permits_Export.xlsx");
+      exportToExcel(filteredRecords, "Concessions_Permits_Export.xlsx", customVouchers, processingDate);
     } catch (e) {
       console.error("Export failed:", e);
     }

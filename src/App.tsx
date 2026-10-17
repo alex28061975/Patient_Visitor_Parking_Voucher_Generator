@@ -1922,7 +1922,18 @@ export default function App() {
       }
     }
     try {
-      exportToExcel(recordsToExport, "Concessions_Permits_Export.xlsx", customVouchersRef.current || customVouchers, formDataRef.current?.todayDate || getTodayISO());
+      const enrichedExport = enrichRecordsWithVouchers(
+        recordsToExport,
+        vouchersDatabaseRef.current || vouchersDatabase,
+        customVouchersRef.current || customVouchers,
+        formDataRef.current?.todayDate || getTodayISO()
+      );
+      exportToExcel(
+        enrichedExport,
+        "Concessions_Permits_Export.xlsx",
+        customVouchersRef.current || customVouchers,
+        formDataRef.current?.todayDate || getTodayISO()
+      );
     } catch (e) {
       showToast("Export failed.", "error");
     }
