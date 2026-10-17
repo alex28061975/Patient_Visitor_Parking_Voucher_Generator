@@ -168,16 +168,45 @@ function DispatchCentreComponent({
   onPreviewRecord,
   emailTracking = {}
 }: DispatchCentreProps) {
-  const [internalSearchQuery, setInternalSearchQuery] = useState("");
   const isControlled = searchQueryProp !== undefined;
-  const searchQuery = isControlled ? searchQueryProp : internalSearchQuery;
+  const initialSearch = isControlled ? (searchQueryProp || "") : "";
+  const [localSearchInput, setLocalSearchInput] = useState(initialSearch);
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState(initialSearch);
+
+  // Sync local and debounced input when external searchQueryProp changes
+  useEffect(() => {
+    if (searchQueryProp !== undefined && searchQueryProp !== localSearchInput) {
+      setLocalSearchInput(searchQueryProp);
+      setDebouncedSearchQuery(searchQueryProp);
+    }
+  }, [searchQueryProp]);
+
+  // 150ms debounce for filtering/search state update
+  useEffect(() => {
+    if (localSearchInput === debouncedSearchQuery) return;
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(localSearchInput);
+      if (isControlled && onSearchQueryChange) {
+        if (searchQueryProp !== localSearchInput) {
+          onSearchQueryChange(localSearchInput);
+        }
+      }
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [localSearchInput, debouncedSearchQuery, isControlled, onSearchQueryChange, searchQueryProp]);
+
   const handleSearchChange = (val: string) => {
-    if (onSearchQueryChange) {
-      onSearchQueryChange(val);
-    } else {
-      setInternalSearchQuery(val);
+    setLocalSearchInput(val);
+    // Immediate clear support
+    if (!val) {
+      setDebouncedSearchQuery("");
+      if (isControlled && onSearchQueryChange) {
+        onSearchQueryChange("");
+      }
     }
   };
+
+  const searchQuery = debouncedSearchQuery;
 
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [actionsOpen, setActionsOpen] = useState(false);

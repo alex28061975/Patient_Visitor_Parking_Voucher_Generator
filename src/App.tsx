@@ -2580,30 +2580,12 @@ export default function App() {
       }
     }
 
-    // ⭐ If in Cloud mode, update Supabase first and NEVER report success if cloud update fails
-    if (storageModeRef.current === "cloud" && isSupabaseConfigured()) {
-      setIsSyncing(true);
-      try {
-        const cloudSuccess = await updatePermitInSupabase(updatedRecord);
-        if (!cloudSuccess) {
-          showToast("Failed to save changes to Supabase cloud database. Record was not updated.", "error");
-          setIsSyncing(false);
-          return false;
-        }
-      } catch (err: any) {
-        console.error("Cloud persistence error:", err);
-        showToast(`Failed to persist changes to Supabase: ${err?.message || 'Network error'}`, "error");
-        setIsSyncing(false);
-        return false;
-      } finally {
-        setIsSyncing(false);
-      }
-    }
-
     lastUserActionTimestampRef.current = Date.now();
 
-    let recordFound = false;
     const currentDb = databaseRef.current || [];
+    const previousRecord = currentDb.find(item => isRecordMatch(item, updatedRecord)) || null;
+
+    let recordFound = false;
     const updatedDb = currentDb.map(item => {
       if (isRecordMatch(item, updatedRecord)) {
         recordFound = true;
@@ -2641,6 +2623,43 @@ export default function App() {
       setCustomVouchers(nextCustom);
       customVouchersRef.current = nextCustom;
       safeLocalStorage.setItem("concessions_custom_vouchers", JSON.stringify(nextCustom));
+    }
+
+    // ⭐ Asynchronous background persistence to Supabase with optimistic rollback on failure (with race safety)
+    if (storageModeRef.current === "cloud" && isSupabaseConfigured()) {
+      setIsSyncing(true);
+      updatePermitInSupabase(updatedRecord)
+        .then(cloudSuccess => {
+          setIsSyncing(false);
+          if (!cloudSuccess) {
+            throw new Error("Supabase returned false on update");
+          }
+        })
+        .catch(err => {
+          setIsSyncing(false);
+          console.error("Cloud persistence error (optimistic save failed):", err);
+          showToast(`Failed to persist changes to Supabase: ${err?.message || 'Network error'}. Rolling back local change.`, "error");
+
+          // Rollback safety check: ensure current database record still matches updatedRecord before rolling back
+          const activeDb = databaseRef.current || [];
+          const currentItem = activeDb.find(item => isRecordMatch(item, updatedRecord));
+          const currentVoucher = currentItem?.voucherCode || (currentItem as any)?.prePaidCode;
+          const targetVoucher = updatedRecord.voucherCode || (updatedRecord as any)?.prePaidCode;
+
+          if (currentItem && currentVoucher === targetVoucher) {
+            const rollbackDb = activeDb.map(item => {
+              if (isRecordMatch(item, updatedRecord)) {
+                return previousRecord ? { ...previousRecord } : item;
+              }
+              return item;
+            });
+            const sortedRollback = sortRecordsByFormIdDesc(rollbackDb);
+            const reconciledRollback = autoCancelDuplicates(sortedRollback);
+            setDatabase(reconciledRollback);
+            databaseRef.current = reconciledRollback;
+            safeLocalStorage.setItem("concessions_permit_db", JSON.stringify(reconciledRollback));
+          }
+        });
     }
 
     // Sync status with dispatch state
