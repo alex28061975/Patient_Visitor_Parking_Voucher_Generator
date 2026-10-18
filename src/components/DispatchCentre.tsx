@@ -1649,12 +1649,12 @@ function DispatchCentreComponent({
                 <Search className="w-4 h-4 text-sky-500 dark:text-sky-400 shrink-0 mr-2" />
                 <input
                   type="text"
-                  value={searchQuery}
+                  value={localSearchInput}
                   onChange={(e) => handleSearchChange(e.target.value)}
                   placeholder="Search driver, VRN, hospital, voucher..."
                   className="w-full bg-transparent text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none font-normal"
                 />
-                {searchQuery && (
+                {localSearchInput && (
                   <button
                     type="button"
                     onClick={() => handleSearchChange("")}
