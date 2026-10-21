@@ -24,7 +24,8 @@ import {
   FileSpreadsheet,
   FileText,
   Pencil,
-  Eye
+  Eye,
+  User
 } from "lucide-react";
 import { 
   CsvPermitRecord, 
@@ -1124,177 +1125,67 @@ function DispatchCentreComponent({
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [database]);
 
-  // ⭐ Repeat User Submissions Index (O(N) memoised index, O(1) row lookups with cross-row identity reconciliation)
+  // Repeat User Submissions Index: O(N) build on database changes, O(1) row lookup.
+  // Email is the canonical identity; normalized name is used only when email is unavailable.
   const { userSubmissionsMap, recordToUserMap } = useMemo(() => {
-    const userSubmissionsMap = new Map<string, {
+    type UserSubmissionEntry = {
       identifier: string;
       displayName: string;
+      email: string;
       count: number;
       firstSubmissionMs: number;
       latestSubmissionMs: number;
-      submissions: { record: CsvPermitRecord; submittedMs: number; idStr: string }[];
-    }>();
-
-    const recordToUserMap = new Map<string, { identifier: string; displayName: string; count: number }>();
-
-    // Helper to clean and normalise emails
-    const cleanEmail = (e?: string) => {
-      const s = (e || "").trim().toLowerCase();
-      if (!s || s === "-" || s === "null" || s === "undefined") return "";
-      return s;
     };
 
-    // Helper to clean and normalise names
-    const cleanName = (n?: string) => {
-      const s = (n || "").trim().toLowerCase().replace(/\s+/g, " ");
-      if (!s || s === "-" || s === "null" || s === "undefined" || s === "unknown") return "";
-      return s;
+    const userSubmissionsMap = new Map<string, UserSubmissionEntry>();
+    const recordToUserMap = new Map<string, string>();
+
+    const cleanEmail = (value?: string) => {
+      const normalized = (value || "").trim().toLowerCase();
+      return !normalized || normalized === "-" || normalized === "null" || normalized === "undefined"
+        ? ""
+        : normalized;
     };
 
-    // Pass 1: Build adjacency / union-find groups by linking records that share an email or name
-    const parentMap = new Map<string, string>();
-    const findRoot = (id: string): string => {
-      let root = id;
-      while (parentMap.has(root) && parentMap.get(root) !== root) {
-        root = parentMap.get(root)!;
-      }
-      // Path compression
-      let curr = id;
-      while (curr !== root) {
-        const next = parentMap.get(curr)!;
-        parentMap.set(curr, root);
-        curr = next;
-      }
-      return root;
+    const cleanName = (value?: string) => {
+      const normalized = (value || "").trim().toLowerCase().replace(/\s+/g, " ");
+      return !normalized || normalized === "-" || normalized === "null" || normalized === "undefined" || normalized === "unknown"
+        ? ""
+        : normalized;
     };
 
-    const union = (id1: string, id2: string) => {
-      const r1 = findRoot(id1);
-      const r2 = findRoot(id2);
-      if (r1 !== r2) {
-        parentMap.set(r2, r1);
-      }
-    };
-
-    // Initialize each record with its own temporary node ID
-    database.forEach((record, idx) => {
+    database.forEach((record, index) => {
       if (!record) return;
-      const nodeId = `rec_${idx}`;
-      parentMap.set(nodeId, nodeId);
-    });
 
-    // Map attribute values to node IDs to cluster overlapping identifiers
-    const emailToNodes = new Map<string, string[]>();
-    const nameToNodes = new Map<string, string[]>();
-
-    database.forEach((record, idx) => {
-      if (!record) return;
-      const nodeId = `rec_${idx}`;
       const email = cleanEmail(record.email || record.driverEmail);
-      const name = cleanName(record.driverName || record.name);
+      const normalizedName = cleanName(record.driverName || record.name);
+      if (!email && !normalizedName) return;
 
-      if (email) {
-        const list = emailToNodes.get(email) || [];
-        list.push(nodeId);
-        emailToNodes.set(email, list);
-      }
-      if (name) {
-        const list = nameToNodes.get(name) || [];
-        list.push(nodeId);
-        nameToNodes.set(name, list);
-      }
-    });
+      const identifier = email ? `email:${email}` : `name:${normalizedName}`;
+      const displayNameRaw = (record.driverName || record.name || "").trim();
+      const submittedMs = getRecordSubmittedTimeMs(record);
+      const recordKey = String(record.formId ?? record.id ?? `${record.vrm}_${record.dateRequired}_${index}`);
 
-    // Union nodes sharing the same email
-    emailToNodes.forEach(nodes => {
-      for (let i = 1; i < nodes.length; i++) {
-        union(nodes[0], nodes[i]);
-      }
-    });
-
-    // Union nodes sharing the same normalized name
-    nameToNodes.forEach(nodes => {
-      for (let i = 1; i < nodes.length; i++) {
-        union(nodes[0], nodes[i]);
-      }
-    });
-
-    // Pass 2: Aggregate records into master user profiles by root group ID
-    const groupToRecords = new Map<string, CsvPermitRecord[]>();
-    database.forEach((record, idx) => {
-      if (!record) return;
-      const nodeId = `rec_${idx}`;
-      const root = findRoot(nodeId);
-      const list = groupToRecords.get(root) || [];
-      list.push(record);
-      groupToRecords.set(root, list);
-    });
-
-    groupToRecords.forEach((records, rootId) => {
-      // Choose best display name and primary email
-      let bestName = "";
-      let bestEmail = "";
-      for (const r of records) {
-        if (!bestEmail) bestEmail = cleanEmail(r.email || r.driverEmail);
-        if (!bestName) bestName = (r.driverName || r.name || "").trim();
-      }
-
-      const uid = bestEmail ? `email:${bestEmail}` : (bestName ? `name:${cleanName(bestName)}` : `group:${rootId}`);
-      const displayName = bestName ? toTitleCase(bestName) : (bestEmail || "Unknown");
-
-      let entry = userSubmissionsMap.get(uid);
-      if (!entry) {
-        entry = {
-          identifier: uid,
-          displayName,
-          count: 0,
-          firstSubmissionMs: Number.MAX_SAFE_INTEGER,
-          latestSubmissionMs: 0,
-          submissions: []
-        };
-        userSubmissionsMap.set(uid, entry);
-      }
-
-      records.forEach(record => {
-        const submittedMs = getRecordSubmittedTimeMs(record);
-        const idStr = String(record.formId ?? record.id ?? "-");
-
-        // Avoid duplicate counting if same formId/id already added
-        const existingSubIndex = entry.submissions.findIndex(s => s.idStr === idStr && idStr !== "-");
-        if (existingSubIndex === -1) {
-          entry.count += 1;
-          entry.submissions.push({ record, submittedMs, idStr });
-        } else {
-          if (submittedMs > 0 && entry.submissions[existingSubIndex].submittedMs <= 0) {
-            entry.submissions[existingSubIndex].submittedMs = submittedMs;
-            entry.submissions[existingSubIndex].record = record;
-          }
-        }
-
+      const existing = userSubmissionsMap.get(identifier);
+      if (existing) {
+        existing.count += 1;
+        if (!existing.displayName && displayNameRaw) existing.displayName = toTitleCase(displayNameRaw);
         if (submittedMs > 0) {
-          if (submittedMs < entry.firstSubmissionMs) {
-            entry.firstSubmissionMs = submittedMs;
-          }
-          if (submittedMs > entry.latestSubmissionMs) {
-            entry.latestSubmissionMs = submittedMs;
-          }
+          if (existing.firstSubmissionMs === 0 || submittedMs < existing.firstSubmissionMs) existing.firstSubmissionMs = submittedMs;
+          if (submittedMs > existing.latestSubmissionMs) existing.latestSubmissionMs = submittedMs;
         }
-      });
-
-      if (entry.firstSubmissionMs === Number.MAX_SAFE_INTEGER) {
-        entry.firstSubmissionMs = 0;
-      }
-      entry.submissions.sort((a, b) => b.submittedMs - a.submittedMs);
-
-      // Map each record in this group to the unified master profile
-      records.forEach(record => {
-        const rKey = String(record.formId ?? record.id ?? `${record.vrm}_${record.dateRequired}`);
-        recordToUserMap.set(rKey, {
-          identifier: uid,
-          displayName: entry.displayName,
-          count: entry.count
+      } else {
+        userSubmissionsMap.set(identifier, {
+          identifier,
+          displayName: displayNameRaw ? toTitleCase(displayNameRaw) : email,
+          email,
+          count: 1,
+          firstSubmissionMs: submittedMs > 0 ? submittedMs : 0,
+          latestSubmissionMs: submittedMs > 0 ? submittedMs : 0
         });
-      });
+      }
+
+      recordToUserMap.set(recordKey, identifier);
     });
 
     return { userSubmissionsMap, recordToUserMap };
@@ -2150,7 +2041,7 @@ function DispatchCentreComponent({
 
                 <th 
                   scope="col" 
-                  className="py-3 px-3 text-center border-l border-slate-200 dark:border-[#143252]/50 whitespace-nowrap select-none text-[10px] font-bold uppercase tracking-wider text-slate-700 dark:text-slate-200"
+                  className="py-3 px-1.5 w-[76px] max-w-[76px] text-center border-l border-slate-200 dark:border-[#143252]/50 whitespace-nowrap select-none text-[9px] font-bold uppercase tracking-wider text-slate-700 dark:text-slate-200"
                 >
                   <div className="flex items-center justify-center gap-1">
                     <span>REPEAT USER</span>
@@ -2161,7 +2052,7 @@ function DispatchCentreComponent({
             <tbody className="divide-y divide-slate-100 dark:divide-[#102947]">
               {virtualizer.isVirtual && virtualizer.topSpacerHeight > 0 && (
                 <tr aria-hidden="true" style={{ height: `${virtualizer.topSpacerHeight}px` }}>
-                  <td colSpan={13} style={{ padding: 0, border: 0 }} />
+                  <td colSpan={14} style={{ padding: 0, border: 0 }} />
                 </tr>
               )}
               {paginatedRecords.map((record, pIdx) => {
@@ -2325,100 +2216,6 @@ function DispatchCentreComponent({
                     <td className="py-3 px-3 font-normal text-slate-900 dark:text-white border-r border-slate-100 dark:border-[#102947]/60 whitespace-nowrap text-[10px] relative">
                       <div className="flex items-center gap-1.5">
                         <span>{record.driverName ? toTitleCase(String(record.driverName)) : "-"}</span>
-                        {(() => {
-                          const rKey = String(record.formId ?? record.id ?? `${record.vrm}_${record.dateRequired}`);
-                          const mappedUser = recordToUserMap.get(rKey);
-                          if (!mappedUser || mappedUser.count < 2) return null;
-
-                          const userEntry = userSubmissionsMap.get(mappedUser.identifier);
-                          if (!userEntry || userEntry.count < 2) return null;
-
-                          const popoverKey = `popover_${mappedUser.identifier}`;
-                          const isPopoverOpen = activeUserPopoverKey === popoverKey;
-
-                          const firstSubStr = userEntry.firstSubmissionMs > 0 ? new Date(userEntry.firstSubmissionMs).toLocaleDateString("en-GB") : "-";
-                          const latestSubStr = userEntry.latestSubmissionMs > 0 ? new Date(userEntry.latestSubmissionMs).toLocaleDateString("en-GB") : "-";
-
-                          return (
-                            <div className="relative inline-block" onClick={e => e.stopPropagation()}>
-                              <button
-                                type="button"
-                                onClick={() => setActiveUserPopoverKey(isPopoverOpen ? null : popoverKey)}
-                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 dark:text-blue-300 border border-blue-500/30 font-mono text-[9px] font-bold transition cursor-pointer select-none"
-                                title={`Repeat User: ${userEntry.count} submissions`}
-                              >
-                                <span className="text-[9px]">👤</span>
-                                <span>×{userEntry.count}</span>
-                              </button>
-
-                              {isPopoverOpen && (
-                                <div 
-                                  ref={popoverRef}
-                                  className="absolute left-0 top-full mt-1.5 z-50 w-72 bg-white dark:bg-[#071b30] border border-slate-200 dark:border-[#1e436c] rounded-xl shadow-xl p-3.5 text-xs text-slate-800 dark:text-slate-200 text-left font-normal"
-                                >
-                                  <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100 dark:border-[#132A4A]">
-                                    <div className="font-semibold text-slate-900 dark:text-white uppercase tracking-wider text-[10px]">
-                                      Concession Form Usage
-                                    </div>
-                                    <button
-                                      type="button"
-                                      onClick={() => setActiveUserPopoverKey(null)}
-                                      className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 p-0.5 cursor-pointer"
-                                    >
-                                      <X className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-
-                                  <div className="font-semibold text-slate-900 dark:text-white mb-2 text-xs">
-                                    {userEntry.displayName}
-                                  </div>
-
-                                  <div className="space-y-1.5 mb-3 text-[11px] text-slate-600 dark:text-slate-300">
-                                    <div className="flex justify-between">
-                                      <span>Total submissions:</span>
-                                      <span className="font-bold text-slate-900 dark:text-white font-mono">{userEntry.count}</span>
-                                    </div>
-                                    <div className="flex justify-between">
-                                      <span>First submission:</span>
-                                      <span className="font-mono">{firstSubStr}</span>
-                                    </div>
-                                    <div className="flex justify-between">
-                                      <span>Latest submission:</span>
-                                      <span className="font-mono">{latestSubStr}</span>
-                                    </div>
-                                  </div>
-
-                                  <div className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1.5 uppercase tracking-wider">
-                                    Submission History
-                                  </div>
-
-                                  <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
-                                    {userEntry.submissions.map((sub, sIdx) => {
-                                      const subDateStr = sub.submittedMs > 0 ? new Date(sub.submittedMs).toLocaleDateString("en-GB") : (sub.record.dateRequired || "-");
-                                      const hosp = sub.record.hospital || "Hospital";
-                                      const ward = sub.record.ward || "-";
-                                      const stat = sub.record.status || "PENDING";
-                                      return (
-                                        <div key={sIdx} className="p-2 rounded-lg bg-slate-50 dark:bg-[#020b19] border border-slate-100 dark:border-[#132A4A] text-[10px] space-y-0.5">
-                                          <div className="flex justify-between items-center font-mono text-[9px] text-slate-500 dark:text-slate-400">
-                                            <span>ID: #{sub.idStr}</span>
-                                            <span>{subDateStr}</span>
-                                          </div>
-                                          <div className="font-medium text-slate-800 dark:text-slate-200 truncate">
-                                            {hosp} ({ward})
-                                          </div>
-                                          <div className="text-[9px] uppercase font-bold text-slate-500">
-                                            Status: {stat}
-                                          </div>
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })()}
                       </div>
                     </td>
 
@@ -2641,106 +2438,70 @@ function DispatchCentreComponent({
                       </div>
                     </td>
 
-                    {/* ⭐ DEDICATED REPEAT USER COLUMN */}
-                    <td className="py-3 px-3 text-center border-l border-slate-100 dark:border-[#102947]/60 whitespace-nowrap text-[10px]" onClick={e => e.stopPropagation()}>
+                    {/* Repeat User — compact derived-data indicator; no extra database requests */}
+                    <td className="py-3 px-1.5 w-[76px] max-w-[76px] text-center border-l border-slate-100 dark:border-[#102947]/60 whitespace-nowrap text-[10px]" onClick={e => e.stopPropagation()}>
                       {(() => {
-                        const rKey = String(record.formId ?? record.id ?? `${record.vrm}_${record.dateRequired}`);
-                        const mappedUser = recordToUserMap.get(rKey);
-                        if (!mappedUser) return <span className="text-slate-400 dark:text-slate-600 font-mono text-[9px]">👤 ×1</span>;
+                        const rKey = String(record.formId ?? record.id ?? `${record.vrm}_${record.dateRequired}_${index}`);
+                        const identifier = recordToUserMap.get(rKey);
+                        if (!identifier) return null;
 
-                        const userEntry = userSubmissionsMap.get(mappedUser.identifier);
-                        const count = userEntry ? userEntry.count : mappedUser.count;
+                        const userEntry = userSubmissionsMap.get(identifier);
+                        if (!userEntry || userEntry.count < 1) return null;
 
-                        const popoverKey = `popover_col_${mappedUser.identifier}_${rowKey}`;
+                        const popoverKey = `repeat_user_${rowKey}`;
                         const isPopoverOpen = activeUserPopoverKey === popoverKey;
-
-                        const firstSubStr = userEntry && userEntry.firstSubmissionMs > 0 ? new Date(userEntry.firstSubmissionMs).toLocaleDateString("en-GB") : "-";
-                        const latestSubStr = userEntry && userEntry.latestSubmissionMs > 0 ? new Date(userEntry.latestSubmissionMs).toLocaleDateString("en-GB") : "-";
-                        const emailDisplay = mappedUser.identifier.startsWith("email:") ? mappedUser.identifier.replace("email:", "") : "-";
+                        const firstSubStr = userEntry.firstSubmissionMs > 0 ? new Date(userEntry.firstSubmissionMs).toLocaleDateString("en-GB") : "-";
+                        const latestSubStr = userEntry.latestSubmissionMs > 0 ? new Date(userEntry.latestSubmissionMs).toLocaleDateString("en-GB") : "-";
 
                         return (
                           <div className="relative inline-block" onClick={e => e.stopPropagation()}>
                             <button
                               type="button"
                               onClick={() => setActiveUserPopoverKey(isPopoverOpen ? null : popoverKey)}
-                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[9px] font-bold transition cursor-pointer select-none shadow-2xs ${
-                                count >= 2
-                                  ? "bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 dark:text-blue-300 border border-blue-500/30"
-                                  : "bg-slate-100 hover:bg-slate-200 dark:bg-[#132A4A] dark:hover:bg-[#1a385c] text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-[#1d3d61]"
-                              }`}
-                              title={`Concession Form Usage: ${count} submission(s)`}
+                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-blue-600/20 hover:bg-blue-600/30 text-blue-500 dark:text-blue-300 border border-blue-500/30 font-mono text-[9px] font-bold transition-colors cursor-pointer select-none"
+                              title={`Repeat User: ${userEntry.count} concession form submissions`}
+                              aria-label={`${userEntry.displayName}: ${userEntry.count} concession form submissions`}
                             >
-                              <span>👤</span>
-                              <span>×{count}</span>
+                              <User className="w-3 h-3" aria-hidden="true" />
+                              <span>×{userEntry.count}</span>
                             </button>
 
                             {isPopoverOpen && (
-                              <div 
+                              <div
                                 ref={popoverRef}
-                                className="absolute right-0 top-full mt-1.5 z-50 w-72 bg-white dark:bg-[#071b30] border border-slate-200 dark:border-[#1e436c] rounded-xl shadow-xl p-3.5 text-xs text-slate-800 dark:text-slate-200 text-left font-normal"
+                                className="absolute right-0 bottom-full mb-1.5 z-50 w-56 bg-white dark:bg-[#071b30] border border-slate-200 dark:border-[#1e436c] rounded-lg shadow-xl p-3 text-left font-normal"
                               >
                                 <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100 dark:border-[#132A4A]">
-                                  <div className="font-semibold text-slate-900 dark:text-white uppercase tracking-wider text-[10px]">
-                                    Concession Form Usage
-                                  </div>
+                                  <span className="font-semibold text-slate-900 dark:text-white text-[10px]">Repeat User Details</span>
                                   <button
                                     type="button"
                                     onClick={() => setActiveUserPopoverKey(null)}
                                     className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 p-0.5 cursor-pointer"
+                                    aria-label="Close repeat user details"
                                   >
                                     <X className="w-3.5 h-3.5" />
                                   </button>
                                 </div>
 
-                                <div className="font-semibold text-slate-900 dark:text-white mb-1 text-xs">
-                                  {mappedUser.displayName}
-                                </div>
-                                <div className="text-[10px] text-slate-500 dark:text-slate-400 font-mono mb-2.5 truncate">
-                                  {emailDisplay}
+                                <div className="font-semibold text-slate-900 dark:text-white text-[11px] truncate">{userEntry.displayName}</div>
+                                {userEntry.email && (
+                                  <div className="text-[9px] text-slate-500 dark:text-slate-400 font-mono truncate mt-0.5 mb-2.5">{userEntry.email}</div>
+                                )}
+
+                                <div className="rounded-md bg-slate-50 dark:bg-[#041222] border border-slate-100 dark:border-[#132A4A] p-2 mb-2.5">
+                                  <div className="text-[9px] text-slate-500 dark:text-slate-400">Total concessions submitted</div>
+                                  <div className="text-right text-lg leading-none font-bold text-blue-600 dark:text-blue-400 font-mono mt-1">{userEntry.count}</div>
                                 </div>
 
-                                <div className="space-y-1.5 mb-3 text-[11px] text-slate-600 dark:text-slate-300">
-                                  <div className="flex justify-between">
-                                    <span>Total submissions:</span>
-                                    <span className="font-bold text-slate-900 dark:text-white font-mono">{count}</span>
+                                <div className="space-y-1.5 text-[9px] text-slate-600 dark:text-slate-300">
+                                  <div className="flex justify-between gap-3">
+                                    <span>First submission</span>
+                                    <span className="font-mono text-slate-900 dark:text-white">{firstSubStr}</span>
                                   </div>
-                                  <div className="flex justify-between">
-                                    <span>First submission:</span>
-                                    <span className="font-mono">{firstSubStr}</span>
+                                  <div className="flex justify-between gap-3">
+                                    <span>Latest submission</span>
+                                    <span className="font-mono text-slate-900 dark:text-white">{latestSubStr}</span>
                                   </div>
-                                  <div className="flex justify-between">
-                                    <span>Latest submission:</span>
-                                    <span className="font-mono">{latestSubStr}</span>
-                                  </div>
-                                </div>
-
-                                <div className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1.5 uppercase tracking-wider">
-                                  Submission History
-                                </div>
-
-                                <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
-                                  {userEntry && userEntry.submissions ? userEntry.submissions.map((sub, sIdx) => {
-                                    const subDateStr = sub.submittedMs > 0 ? new Date(sub.submittedMs).toLocaleDateString("en-GB") : (sub.record.dateRequired || "-");
-                                    const hosp = sub.record.hospital || "Hospital";
-                                    const ward = sub.record.ward || "-";
-                                    const stat = sub.record.status || "PENDING";
-                                    return (
-                                      <div key={sIdx} className="p-2 rounded-lg bg-slate-50 dark:bg-[#020b19] border border-slate-100 dark:border-[#132A4A] text-[10px] space-y-0.5">
-                                        <div className="flex justify-between items-center font-mono text-[9px] text-slate-500 dark:text-slate-400">
-                                          <span>ID: #{sub.idStr}</span>
-                                          <span>{subDateStr}</span>
-                                        </div>
-                                        <div className="font-medium text-slate-800 dark:text-slate-200 truncate">
-                                          {hosp} ({ward})
-                                        </div>
-                                        <div className="text-[9px] uppercase font-bold text-slate-500">
-                                          Status: {stat}
-                                        </div>
-                                      </div>
-                                    );
-                                  }) : (
-                                    <div className="text-[10px] text-slate-400 italic">No history available</div>
-                                  )}
                                 </div>
                               </div>
                             )}
@@ -2753,12 +2514,12 @@ function DispatchCentreComponent({
               })}
               {virtualizer.isVirtual && virtualizer.bottomSpacerHeight > 0 && (
                 <tr aria-hidden="true" style={{ height: `${virtualizer.bottomSpacerHeight}px` }}>
-                  <td colSpan={13} style={{ padding: 0, border: 0 }} />
+                  <td colSpan={14} style={{ padding: 0, border: 0 }} />
                 </tr>
               )}
               {filteredRecords.length === 0 && (
                 <tr>
-                  <td colSpan={13} className="py-12 text-center text-slate-500 dark:text-slate-400 text-xs">
+                  <td colSpan={14} className="py-12 text-center text-slate-500 dark:text-slate-400 text-xs">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <Filter className="w-6 h-6 text-slate-400 stroke-1" />
                       <p className="font-semibold text-sm text-slate-700 dark:text-slate-300">No matching permits found</p>
