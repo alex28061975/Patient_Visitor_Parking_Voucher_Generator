@@ -50,6 +50,51 @@ ALTER TABLE public.vouchers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.dispatched_history ENABLE ROW LEVEL SECURITY;
 
 -- ============================================================
+-- EXPLICIT DATA API PERMISSIONS (anon, authenticated, service_role)
+-- Ensures supabase-js and PostgREST have table privileges under Supabase's
+-- public schema access policies. RLS policies control row-level data access.
+-- ============================================================
+
+-- Permits table permissions
+GRANT SELECT
+ON public.permits
+TO anon;
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON public.permits
+TO authenticated;
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON public.permits
+TO service_role;
+
+-- Vouchers table permissions
+GRANT SELECT
+ON public.vouchers
+TO anon;
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON public.vouchers
+TO authenticated;
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON public.vouchers
+TO service_role;
+
+-- Dispatched history table permissions
+GRANT SELECT
+ON public.dispatched_history
+TO anon;
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON public.dispatched_history
+TO authenticated;
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON public.dispatched_history
+TO service_role;
+
+-- ============================================================
 -- RLS POLICIES (Secure authenticated access; no open ALL true)
 -- ============================================================
 

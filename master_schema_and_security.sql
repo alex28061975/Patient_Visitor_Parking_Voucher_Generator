@@ -71,6 +71,51 @@ ALTER TABLE public.vouchers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.dispatched_history ENABLE ROW LEVEL SECURITY;
 
 -- ==============================================================================
+-- 2.1 EXPLICIT DATA API PERMISSIONS (anon, authenticated, service_role)
+-- Ensures supabase-js and PostgREST have table privileges under Supabase's
+-- public schema access policies. RLS policies control row-level data access.
+-- ==============================================================================
+
+-- Permits table permissions
+GRANT SELECT
+ON public.permits
+TO anon;
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON public.permits
+TO authenticated;
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON public.permits
+TO service_role;
+
+-- Vouchers table permissions
+GRANT SELECT
+ON public.vouchers
+TO anon;
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON public.vouchers
+TO authenticated;
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON public.vouchers
+TO service_role;
+
+-- Dispatched history table permissions
+GRANT SELECT
+ON public.dispatched_history
+TO anon;
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON public.dispatched_history
+TO authenticated;
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON public.dispatched_history
+TO service_role;
+
+-- ==============================================================================
 -- 3. CLEAN UP ALL OBSOLETE / OVERLY PERMISSIVE POLICIES
 -- ==============================================================================
 
@@ -262,6 +307,9 @@ BEGIN
   LOOP
     IF cmd.schema_name = 'public' THEN
       EXECUTE format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY;', cmd.object_identity);
+      EXECUTE format('GRANT SELECT ON %s TO anon;', cmd.object_identity);
+      EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON %s TO authenticated;', cmd.object_identity);
+      EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON %s TO service_role;', cmd.object_identity);
     END IF;
   END LOOP;
 END;

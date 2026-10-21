@@ -21,9 +21,10 @@ Supabase provides a free cloud PostgreSQL database that syncs your parking permi
 4. Click **Run** (or press `Ctrl + Enter`).
 5. You will see "Success. No rows returned" confirming that:
    - `permits`, `vouchers`, and `dispatched_history` tables are created with RLS enabled.
+   - Explicit Data API table grants are applied to `anon`, `authenticated`, and `service_role` to ensure PostgREST and supabase-js access.
    - Explicit `authenticated` policies are applied, with write access blocked for `anon`.
    - The `log_dispatch` RPC function is secured with `SECURITY DEFINER` and restricted to `service_role`.
-   - The `tr_auto_enable_rls` event trigger is active to automatically enforce RLS on any future tables.
+   - The `tr_auto_enable_rls` event trigger is active to automatically enforce RLS and Data API permissions on any future tables.
 
 ---
 

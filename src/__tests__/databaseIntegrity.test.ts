@@ -214,4 +214,60 @@ describe('ParkPass Database Integrity & Security Audit Suite', () => {
     assert.equal(result, false, 'updatePermitInSupabase must reject records without id/formId');
   });
 
+  // =========================================================================
+  // AUDIT 9 — Explicit Data API Table Permissions for anon, authenticated, and service_role
+  // Ensures compatibility with upcoming Supabase public schema policy changes
+  // =========================================================================
+  it('AUDIT 9: master_schema_and_security.sql and supabase_schema.sql include explicit Data API permission grants', () => {
+    const masterSql = fs.readFileSync(masterSqlPath, 'utf8');
+    const supabaseSql = fs.readFileSync(supabaseSqlPath, 'utf8');
+
+    const tables = ['permits', 'vouchers', 'dispatched_history'];
+
+    for (const table of tables) {
+      // 1. Check anon SELECT grant in master_schema_and_security.sql
+      assert.match(
+        masterSql,
+        new RegExp(`GRANT\\s+SELECT\\s+ON\\s+public\\.${table}\\s+TO\\s+anon;`, 'i'),
+        `master_schema_and_security.sql must grant SELECT on public.${table} to anon`
+      );
+
+      // 2. Check authenticated SELECT, INSERT, UPDATE, DELETE grant in master_schema_and_security.sql
+      assert.match(
+        masterSql,
+        new RegExp(`GRANT\\s+SELECT,\\s*INSERT,\\s*UPDATE,\\s*DELETE\\s+ON\\s+public\\.${table}\\s+TO\\s+authenticated;`, 'i'),
+        `master_schema_and_security.sql must grant SELECT, INSERT, UPDATE, DELETE on public.${table} to authenticated`
+      );
+
+      // 3. Check service_role SELECT, INSERT, UPDATE, DELETE grant in master_schema_and_security.sql
+      assert.match(
+        masterSql,
+        new RegExp(`GRANT\\s+SELECT,\\s*INSERT,\\s*UPDATE,\\s*DELETE\\s+ON\\s+public\\.${table}\\s+TO\\s+service_role;`, 'i'),
+        `master_schema_and_security.sql must grant SELECT, INSERT, UPDATE, DELETE on public.${table} to service_role`
+      );
+
+      // 4. Check anon SELECT grant in supabase_schema.sql
+      assert.match(
+        supabaseSql,
+        new RegExp(`GRANT\\s+SELECT\\s+ON\\s+public\\.${table}\\s+TO\\s+anon;`, 'i'),
+        `supabase_schema.sql must grant SELECT on public.${table} to anon`
+      );
+
+      // 5. Check authenticated SELECT, INSERT, UPDATE, DELETE grant in supabase_schema.sql
+      assert.match(
+        supabaseSql,
+        new RegExp(`GRANT\\s+SELECT,\\s*INSERT,\\s*UPDATE,\\s*DELETE\\s+ON\\s+public\\.${table}\\s+TO\\s+authenticated;`, 'i'),
+        `supabase_schema.sql must grant SELECT, INSERT, UPDATE, DELETE on public.${table} to authenticated`
+      );
+
+      // 6. Check service_role SELECT, INSERT, UPDATE, DELETE grant in supabase_schema.sql
+      assert.match(
+        supabaseSql,
+        new RegExp(`GRANT\\s+SELECT,\\s*INSERT,\\s*UPDATE,\\s*DELETE\\s+ON\\s+public\\.${table}\\s+TO\\s+service_role;`, 'i'),
+        `supabase_schema.sql must grant SELECT, INSERT, UPDATE, DELETE on public.${table} to service_role`
+      );
+    }
+  });
+
 });
+
