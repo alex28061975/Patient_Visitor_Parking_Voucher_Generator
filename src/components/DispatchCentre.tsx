@@ -2147,6 +2147,15 @@ function DispatchCentreComponent({
                     {renderSortIndicator("actions")}
                   </div>
                 </th>
+
+                <th 
+                  scope="col" 
+                  className="py-3 px-3 text-center border-l border-slate-200 dark:border-[#143252]/50 whitespace-nowrap select-none text-[10px] font-bold uppercase tracking-wider text-slate-700 dark:text-slate-200"
+                >
+                  <div className="flex items-center justify-center gap-1">
+                    <span>REPEAT USER</span>
+                  </div>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-[#102947]">
@@ -2335,7 +2344,7 @@ function DispatchCentreComponent({
                               <button
                                 type="button"
                                 onClick={() => setActiveUserPopoverKey(isPopoverOpen ? null : popoverKey)}
-                                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-slate-100 hover:bg-blue-100 dark:bg-[#132A4A] dark:hover:bg-blue-900/50 text-slate-600 dark:text-slate-300 font-mono text-[9px] font-bold transition cursor-pointer select-none"
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 dark:text-blue-300 border border-blue-500/30 font-mono text-[9px] font-bold transition cursor-pointer select-none"
                                 title={`Repeat User: ${userEntry.count} submissions`}
                               >
                                 <span className="text-[9px]">👤</span>
@@ -2630,6 +2639,114 @@ function DispatchCentreComponent({
                           );
                         })()}
                       </div>
+                    </td>
+
+                    {/* ⭐ DEDICATED REPEAT USER COLUMN */}
+                    <td className="py-3 px-3 text-center border-l border-slate-100 dark:border-[#102947]/60 whitespace-nowrap text-[10px]" onClick={e => e.stopPropagation()}>
+                      {(() => {
+                        const rKey = String(record.formId ?? record.id ?? `${record.vrm}_${record.dateRequired}`);
+                        const mappedUser = recordToUserMap.get(rKey);
+                        if (!mappedUser) return <span className="text-slate-400 dark:text-slate-600 font-mono text-[9px]">👤 ×1</span>;
+
+                        const userEntry = userSubmissionsMap.get(mappedUser.identifier);
+                        const count = userEntry ? userEntry.count : mappedUser.count;
+
+                        const popoverKey = `popover_col_${mappedUser.identifier}_${rowKey}`;
+                        const isPopoverOpen = activeUserPopoverKey === popoverKey;
+
+                        const firstSubStr = userEntry && userEntry.firstSubmissionMs > 0 ? new Date(userEntry.firstSubmissionMs).toLocaleDateString("en-GB") : "-";
+                        const latestSubStr = userEntry && userEntry.latestSubmissionMs > 0 ? new Date(userEntry.latestSubmissionMs).toLocaleDateString("en-GB") : "-";
+                        const emailDisplay = mappedUser.identifier.startsWith("email:") ? mappedUser.identifier.replace("email:", "") : "-";
+
+                        return (
+                          <div className="relative inline-block" onClick={e => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              onClick={() => setActiveUserPopoverKey(isPopoverOpen ? null : popoverKey)}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[9px] font-bold transition cursor-pointer select-none shadow-2xs ${
+                                count >= 2
+                                  ? "bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 dark:text-blue-300 border border-blue-500/30"
+                                  : "bg-slate-100 hover:bg-slate-200 dark:bg-[#132A4A] dark:hover:bg-[#1a385c] text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-[#1d3d61]"
+                              }`}
+                              title={`Concession Form Usage: ${count} submission(s)`}
+                            >
+                              <span>👤</span>
+                              <span>×{count}</span>
+                            </button>
+
+                            {isPopoverOpen && (
+                              <div 
+                                ref={popoverRef}
+                                className="absolute right-0 top-full mt-1.5 z-50 w-72 bg-white dark:bg-[#071b30] border border-slate-200 dark:border-[#1e436c] rounded-xl shadow-xl p-3.5 text-xs text-slate-800 dark:text-slate-200 text-left font-normal"
+                              >
+                                <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100 dark:border-[#132A4A]">
+                                  <div className="font-semibold text-slate-900 dark:text-white uppercase tracking-wider text-[10px]">
+                                    Concession Form Usage
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => setActiveUserPopoverKey(null)}
+                                    className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 p-0.5 cursor-pointer"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+
+                                <div className="font-semibold text-slate-900 dark:text-white mb-1 text-xs">
+                                  {mappedUser.displayName}
+                                </div>
+                                <div className="text-[10px] text-slate-500 dark:text-slate-400 font-mono mb-2.5 truncate">
+                                  {emailDisplay}
+                                </div>
+
+                                <div className="space-y-1.5 mb-3 text-[11px] text-slate-600 dark:text-slate-300">
+                                  <div className="flex justify-between">
+                                    <span>Total submissions:</span>
+                                    <span className="font-bold text-slate-900 dark:text-white font-mono">{count}</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span>First submission:</span>
+                                    <span className="font-mono">{firstSubStr}</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span>Latest submission:</span>
+                                    <span className="font-mono">{latestSubStr}</span>
+                                  </div>
+                                </div>
+
+                                <div className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1.5 uppercase tracking-wider">
+                                  Submission History
+                                </div>
+
+                                <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
+                                  {userEntry && userEntry.submissions ? userEntry.submissions.map((sub, sIdx) => {
+                                    const subDateStr = sub.submittedMs > 0 ? new Date(sub.submittedMs).toLocaleDateString("en-GB") : (sub.record.dateRequired || "-");
+                                    const hosp = sub.record.hospital || "Hospital";
+                                    const ward = sub.record.ward || "-";
+                                    const stat = sub.record.status || "PENDING";
+                                    return (
+                                      <div key={sIdx} className="p-2 rounded-lg bg-slate-50 dark:bg-[#020b19] border border-slate-100 dark:border-[#132A4A] text-[10px] space-y-0.5">
+                                        <div className="flex justify-between items-center font-mono text-[9px] text-slate-500 dark:text-slate-400">
+                                          <span>ID: #{sub.idStr}</span>
+                                          <span>{subDateStr}</span>
+                                        </div>
+                                        <div className="font-medium text-slate-800 dark:text-slate-200 truncate">
+                                          {hosp} ({ward})
+                                        </div>
+                                        <div className="text-[9px] uppercase font-bold text-slate-500">
+                                          Status: {stat}
+                                        </div>
+                                      </div>
+                                    );
+                                  }) : (
+                                    <div className="text-[10px] text-slate-400 italic">No history available</div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </td>
                   </tr>
                 );
