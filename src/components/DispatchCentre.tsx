@@ -1124,9 +1124,9 @@ function DispatchCentreComponent({
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [database]);
 
-  // ⭐ Repeat User Submissions Index (O(N) memoised index, O(1) row lookups)
-  const userSubmissionsMap = useMemo(() => {
-    const map = new Map<string, {
+  // ⭐ Repeat User Submissions Index (O(N) memoised index, O(1) row lookups with cross-row identity reconciliation)
+  const { userSubmissionsMap, recordToUserMap } = useMemo(() => {
+    const userSubmissionsMap = new Map<string, {
       identifier: string;
       displayName: string;
       count: number;
@@ -1135,73 +1135,169 @@ function DispatchCentreComponent({
       submissions: { record: CsvPermitRecord; submittedMs: number; idStr: string }[];
     }>();
 
-    database.forEach(record => {
-      if (!record) return;
-      const email = (record.email || record.driverEmail || "").trim().toLowerCase();
-      let uid = "";
-      let displayName = "";
+    const recordToUserMap = new Map<string, { identifier: string; displayName: string; count: number }>();
 
-      if (email && email !== "-" && email !== "null" && email !== "undefined") {
-        uid = `email:${email}`;
-        displayName = record.driverName ? toTitleCase(String(record.driverName)) : email;
-      } else {
-        const name = (record.driverName || record.name || "").trim().toLowerCase().replace(/\s+/g, " ");
-        if (name && name !== "-" && name !== "null" && name !== "undefined" && name !== "unknown") {
-          uid = `name:${name}`;
-          displayName = toTitleCase(String(record.driverName || record.name));
-        }
+    // Helper to clean and normalise emails
+    const cleanEmail = (e?: string) => {
+      const s = (e || "").trim().toLowerCase();
+      if (!s || s === "-" || s === "null" || s === "undefined") return "";
+      return s;
+    };
+
+    // Helper to clean and normalise names
+    const cleanName = (n?: string) => {
+      const s = (n || "").trim().toLowerCase().replace(/\s+/g, " ");
+      if (!s || s === "-" || s === "null" || s === "undefined" || s === "unknown") return "";
+      return s;
+    };
+
+    // Pass 1: Build adjacency / union-find groups by linking records that share an email or name
+    const parentMap = new Map<string, string>();
+    const findRoot = (id: string): string => {
+      let root = id;
+      while (parentMap.has(root) && parentMap.get(root) !== root) {
+        root = parentMap.get(root)!;
+      }
+      // Path compression
+      let curr = id;
+      while (curr !== root) {
+        const next = parentMap.get(curr)!;
+        parentMap.set(curr, root);
+        curr = next;
+      }
+      return root;
+    };
+
+    const union = (id1: string, id2: string) => {
+      const r1 = findRoot(id1);
+      const r2 = findRoot(id2);
+      if (r1 !== r2) {
+        parentMap.set(r2, r1);
+      }
+    };
+
+    // Initialize each record with its own temporary node ID
+    database.forEach((record, idx) => {
+      if (!record) return;
+      const nodeId = `rec_${idx}`;
+      parentMap.set(nodeId, nodeId);
+    });
+
+    // Map attribute values to node IDs to cluster overlapping identifiers
+    const emailToNodes = new Map<string, string[]>();
+    const nameToNodes = new Map<string, string[]>();
+
+    database.forEach((record, idx) => {
+      if (!record) return;
+      const nodeId = `rec_${idx}`;
+      const email = cleanEmail(record.email || record.driverEmail);
+      const name = cleanName(record.driverName || record.name);
+
+      if (email) {
+        const list = emailToNodes.get(email) || [];
+        list.push(nodeId);
+        emailToNodes.set(email, list);
+      }
+      if (name) {
+        const list = nameToNodes.get(name) || [];
+        list.push(nodeId);
+        nameToNodes.set(name, list);
+      }
+    });
+
+    // Union nodes sharing the same email
+    emailToNodes.forEach(nodes => {
+      for (let i = 1; i < nodes.length; i++) {
+        union(nodes[0], nodes[i]);
+      }
+    });
+
+    // Union nodes sharing the same normalized name
+    nameToNodes.forEach(nodes => {
+      for (let i = 1; i < nodes.length; i++) {
+        union(nodes[0], nodes[i]);
+      }
+    });
+
+    // Pass 2: Aggregate records into master user profiles by root group ID
+    const groupToRecords = new Map<string, CsvPermitRecord[]>();
+    database.forEach((record, idx) => {
+      if (!record) return;
+      const nodeId = `rec_${idx}`;
+      const root = findRoot(nodeId);
+      const list = groupToRecords.get(root) || [];
+      list.push(record);
+      groupToRecords.set(root, list);
+    });
+
+    groupToRecords.forEach((records, rootId) => {
+      // Choose best display name and primary email
+      let bestName = "";
+      let bestEmail = "";
+      for (const r of records) {
+        if (!bestEmail) bestEmail = cleanEmail(r.email || r.driverEmail);
+        if (!bestName) bestName = (r.driverName || r.name || "").trim();
       }
 
-      if (!uid) return; // Skip unknown / unidentified records
+      const uid = bestEmail ? `email:${bestEmail}` : (bestName ? `name:${cleanName(bestName)}` : `group:${rootId}`);
+      const displayName = bestName ? toTitleCase(bestName) : (bestEmail || "Unknown");
 
-      const submittedMs = getRecordSubmittedTimeMs(record);
-      const idStr = String(record.formId ?? record.id ?? "-");
-
-      let entry = map.get(uid);
+      let entry = userSubmissionsMap.get(uid);
       if (!entry) {
         entry = {
           identifier: uid,
-          displayName: displayName || uid,
+          displayName,
           count: 0,
-          firstSubmissionMs: submittedMs > 0 ? submittedMs : Number.MAX_SAFE_INTEGER,
-          latestSubmissionMs: submittedMs > 0 ? submittedMs : 0,
+          firstSubmissionMs: Number.MAX_SAFE_INTEGER,
+          latestSubmissionMs: 0,
           submissions: []
         };
-        map.set(uid, entry);
+        userSubmissionsMap.set(uid, entry);
       }
 
-      // Avoid duplicate counting if same formId/id or duplicate record instance exists in database array
-      const existingSubIndex = entry.submissions.findIndex(s => s.idStr === idStr && idStr !== "-");
-      if (existingSubIndex === -1) {
-        entry.count += 1;
-        entry.submissions.push({ record, submittedMs, idStr });
-      } else {
-        // If already present, keep the one with a valid timestamp or update reference if newer
-        if (submittedMs > 0 && entry.submissions[existingSubIndex].submittedMs <= 0) {
-          entry.submissions[existingSubIndex].submittedMs = submittedMs;
-          entry.submissions[existingSubIndex].record = record;
-        }
-      }
+      records.forEach(record => {
+        const submittedMs = getRecordSubmittedTimeMs(record);
+        const idStr = String(record.formId ?? record.id ?? "-");
 
-      if (submittedMs > 0) {
-        if (submittedMs < entry.firstSubmissionMs || entry.firstSubmissionMs === Number.MAX_SAFE_INTEGER) {
-          entry.firstSubmissionMs = submittedMs;
+        // Avoid duplicate counting if same formId/id already added
+        const existingSubIndex = entry.submissions.findIndex(s => s.idStr === idStr && idStr !== "-");
+        if (existingSubIndex === -1) {
+          entry.count += 1;
+          entry.submissions.push({ record, submittedMs, idStr });
+        } else {
+          if (submittedMs > 0 && entry.submissions[existingSubIndex].submittedMs <= 0) {
+            entry.submissions[existingSubIndex].submittedMs = submittedMs;
+            entry.submissions[existingSubIndex].record = record;
+          }
         }
-        if (submittedMs > entry.latestSubmissionMs) {
-          entry.latestSubmissionMs = submittedMs;
-        }
-      }
-    });
 
-    // Sort submissions for each user chronologically descending (latest first)
-    map.forEach(entry => {
-      entry.submissions.sort((a, b) => b.submittedMs - a.submittedMs);
+        if (submittedMs > 0) {
+          if (submittedMs < entry.firstSubmissionMs) {
+            entry.firstSubmissionMs = submittedMs;
+          }
+          if (submittedMs > entry.latestSubmissionMs) {
+            entry.latestSubmissionMs = submittedMs;
+          }
+        }
+      });
+
       if (entry.firstSubmissionMs === Number.MAX_SAFE_INTEGER) {
         entry.firstSubmissionMs = 0;
       }
+      entry.submissions.sort((a, b) => b.submittedMs - a.submittedMs);
+
+      // Map each record in this group to the unified master profile
+      records.forEach(record => {
+        const rKey = String(record.formId ?? record.id ?? `${record.vrm}_${record.dateRequired}`);
+        recordToUserMap.set(rKey, {
+          identifier: uid,
+          displayName: entry.displayName,
+          count: entry.count
+        });
+      });
     });
 
-    return map;
+    return { userSubmissionsMap, recordToUserMap };
   }, [database]);
 
   const [activeUserPopoverKey, setActiveUserPopoverKey] = useState<string | null>(null);
@@ -2221,20 +2317,14 @@ function DispatchCentreComponent({
                       <div className="flex items-center gap-1.5">
                         <span>{record.driverName ? toTitleCase(String(record.driverName)) : "-"}</span>
                         {(() => {
-                          const email = (record.email || record.driverEmail || "").trim().toLowerCase();
-                          let uid = "";
-                          if (email && email !== "-" && email !== "null" && email !== "undefined") {
-                            uid = `email:${email}`;
-                          } else {
-                            const name = (record.driverName || record.name || "").trim().toLowerCase().replace(/\s+/g, " ");
-                            if (name && name !== "-" && name !== "null" && name !== "undefined" && name !== "unknown") {
-                              uid = `name:${name}`;
-                            }
-                          }
-                          const userEntry = uid ? userSubmissionsMap.get(uid) : null;
+                          const rKey = String(record.formId ?? record.id ?? `${record.vrm}_${record.dateRequired}`);
+                          const mappedUser = recordToUserMap.get(rKey);
+                          if (!mappedUser || mappedUser.count < 2) return null;
+
+                          const userEntry = userSubmissionsMap.get(mappedUser.identifier);
                           if (!userEntry || userEntry.count < 2) return null;
 
-                          const popoverKey = `popover_${uid}`;
+                          const popoverKey = `popover_${mappedUser.identifier}`;
                           const isPopoverOpen = activeUserPopoverKey === popoverKey;
 
                           const firstSubStr = userEntry.firstSubmissionMs > 0 ? new Date(userEntry.firstSubmissionMs).toLocaleDateString("en-GB") : "-";
