@@ -1170,8 +1170,19 @@ function DispatchCentreComponent({
         map.set(uid, entry);
       }
 
-      entry.count += 1;
-      entry.submissions.push({ record, submittedMs, idStr });
+      // Avoid duplicate counting if same formId/id or duplicate record instance exists in database array
+      const existingSubIndex = entry.submissions.findIndex(s => s.idStr === idStr && idStr !== "-");
+      if (existingSubIndex === -1) {
+        entry.count += 1;
+        entry.submissions.push({ record, submittedMs, idStr });
+      } else {
+        // If already present, keep the one with a valid timestamp or update reference if newer
+        if (submittedMs > 0 && entry.submissions[existingSubIndex].submittedMs <= 0) {
+          entry.submissions[existingSubIndex].submittedMs = submittedMs;
+          entry.submissions[existingSubIndex].record = record;
+        }
+      }
+
       if (submittedMs > 0) {
         if (submittedMs < entry.firstSubmissionMs || entry.firstSubmissionMs === Number.MAX_SAFE_INTEGER) {
           entry.firstSubmissionMs = submittedMs;
