@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useTableVirtualizer } from "../utils/useTableVirtualizer";
 import { 
   ChevronDown, 
@@ -1192,12 +1193,14 @@ function DispatchCentreComponent({
   }, [database]);
 
   const [activeUserPopoverKey, setActiveUserPopoverKey] = useState<string | null>(null);
+  const [popoverAnchorRect, setPopoverAnchorRect] = useState<DOMRect | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (popoverRef.current && !popoverRef.current.contains(event.target as Node)) {
         setActiveUserPopoverKey(null);
+        setPopoverAnchorRect(null);
       }
     }
     if (activeUserPopoverKey) {
@@ -2457,7 +2460,17 @@ function DispatchCentreComponent({
                           <div className="relative inline-block" onClick={e => e.stopPropagation()}>
                             <button
                               type="button"
-                              onClick={() => setActiveUserPopoverKey(isPopoverOpen ? null : popoverKey)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (isPopoverOpen) {
+                                  setActiveUserPopoverKey(null);
+                                  setPopoverAnchorRect(null);
+                                } else {
+                                  const rect = e.currentTarget.getBoundingClientRect();
+                                  setPopoverAnchorRect(rect);
+                                  setActiveUserPopoverKey(popoverKey);
+                                }
+                              }}
                               className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-blue-600/20 hover:bg-blue-600/30 text-blue-500 dark:text-blue-300 border border-blue-500/30 font-mono text-[9px] font-bold transition-colors cursor-pointer select-none"
                               title={`Repeat User: ${userEntry.count} concession form submissions`}
                               aria-label={`${userEntry.displayName}: ${userEntry.count} concession form submissions`}
@@ -2466,16 +2479,28 @@ function DispatchCentreComponent({
                               <span>×{userEntry.count}</span>
                             </button>
 
-                            {isPopoverOpen && (
+                            {isPopoverOpen && popoverAnchorRect && createPortal(
                               <div
                                 ref={popoverRef}
-                                className="absolute right-0 bottom-full mb-1.5 z-50 w-56 bg-white dark:bg-[#071b30] border border-slate-200 dark:border-[#1e436c] rounded-lg shadow-xl p-3 text-left font-normal"
+                                className="fixed z-[99999] w-56 bg-white dark:bg-[#071b30] border border-slate-200 dark:border-[#1e436c] rounded-lg shadow-xl p-3 text-left font-normal"
+                                style={{
+                                  ...(popoverAnchorRect.top < 220 ? {
+                                    top: `${popoverAnchorRect.bottom + 6}px`,
+                                  } : {
+                                    bottom: `${window.innerHeight - popoverAnchorRect.top + 6}px`,
+                                  }),
+                                  right: `${Math.max(12, window.innerWidth - popoverAnchorRect.right)}px`
+                                }}
+                                onClick={e => e.stopPropagation()}
                               >
                                 <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100 dark:border-[#132A4A]">
                                   <span className="font-semibold text-slate-900 dark:text-white text-[10px]">Repeat User Details</span>
                                   <button
                                     type="button"
-                                    onClick={() => setActiveUserPopoverKey(null)}
+                                    onClick={() => {
+                                      setActiveUserPopoverKey(null);
+                                      setPopoverAnchorRect(null);
+                                    }}
                                     className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 p-0.5 cursor-pointer"
                                     aria-label="Close repeat user details"
                                   >
@@ -2503,7 +2528,8 @@ function DispatchCentreComponent({
                                     <span className="font-mono text-slate-900 dark:text-white">{latestSubStr}</span>
                                   </div>
                                 </div>
-                              </div>
+                              </div>,
+                              document.body
                             )}
                           </div>
                         );
