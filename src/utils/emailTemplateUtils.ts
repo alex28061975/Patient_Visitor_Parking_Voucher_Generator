@@ -637,25 +637,25 @@ Car Parking Services Team
 
 We have received your parking concession request for vehicle ${vrm}.
 
-The start date on your application was set to ${validFrom}, which is in the future. To prevent issuing an invalid concession, this request has been cancelled.
+The start date on your application was set to ${validFrom}, which is outside the permitted advance booking period. To prevent issuing an invalid concession and reduce the risk of a Parking Charge Notice (PCN) being issued, this request has been cancelled.
 
-If you still require parking, please contact your ward or department to submit a new concession request.
+If you still require parking, please contact your ward or department to submit a new concession request with the correct start date.
 
 If you continue to experience any issues or have any further queries, please contact: ${NHS_SUPPORT_EMAIL}
 
 Kind regards,
-Barts Health NHS Trust
-Car Parking Services Team`;
+Car Parking Services Team
+Barts Health NHS Trust`;
 
     htmlText = `<div style="font-family: Calibri, Arial, sans-serif; font-size: 11pt; color: #000000; line-height: 1.35;">
 Dear ${driverName},<br/><br/>
 We have received your parking concession request for vehicle <strong>${vrm}</strong>.<br/><br/>
-The start date on your application was set to ${validFrom}, which is in the future. To prevent issuing an invalid concession, this request has been cancelled.<br/><br/>
-If you still require parking, please contact your ward or department to submit a new concession request.<br/><br/>
+The start date on your application was set to ${validFrom}, which is outside the permitted advance booking period. To prevent issuing an invalid concession and reduce the risk of a Parking Charge Notice (PCN) being issued, this request has been cancelled.<br/><br/>
+If you still require parking, please contact your ward or department to submit a new concession request with the correct start date.<br/><br/>
 If you continue to experience any issues or have any further queries, please contact: <a href="mailto:${NHS_SUPPORT_EMAIL}" style="color: #005EB8; text-decoration: underline;">${NHS_SUPPORT_EMAIL}</a><br/><br/>
 Kind regards,<br/>
-Barts Health NHS Trust<br/>
-Car Parking Services Team
+Car Parking Services Team<br/>
+Barts Health NHS Trust
 </div>`;
   }
 

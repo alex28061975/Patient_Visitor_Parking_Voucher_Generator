@@ -313,7 +313,7 @@ describe('ParkPass Concessions Regression Test Suite', () => {
       reason: details.reason
     });
     assert.match(email.subject, /Cancelled: Concession Permit – FU26TUE/);
-    assert.match(email.plainText, /is in the future/i);
+    assert.match(email.plainText, /is outside the permitted advance booking period/i);
   });
 
   // =========================================================================
@@ -405,15 +405,15 @@ describe('ParkPass Concessions Regression Test Suite', () => {
 
 We have received your parking concession request for vehicle AB12CDE.
 
-The start date on your application was set to 11/10/2026, which is in the future. To prevent issuing an invalid concession, this request has been cancelled.
+The start date on your application was set to 11/10/2026, which is outside the permitted advance booking period. To prevent issuing an invalid concession and reduce the risk of a Parking Charge Notice (PCN) being issued, this request has been cancelled.
 
-If you still require parking, please contact your ward or department to submit a new concession request.
+If you still require parking, please contact your ward or department to submit a new concession request with the correct start date.
 
 If you continue to experience any issues or have any further queries, please contact: parkingadminbh.bartshealth@nhs.net
 
 Kind regards,
-Barts Health NHS Trust
-Car Parking Services Team`;
+Car Parking Services Team
+Barts Health NHS Trust`;
     assert.equal(email11.plainText, expectedBody11);
     assert.match(email11.htmlText, /<strong>AB12CDE<\/strong>/);
     assert.match(email11.htmlText, /<a href="mailto:parkingadminbh\.bartshealth@nhs\.net"/);
@@ -439,7 +439,7 @@ Car Parking Services Team`;
       submissionDate: futureRec12.submissionDate,
       reason: details12.reason
     });
-    assert.match(email12.plainText, /The start date on your application was set to 12\/10\/2026, which is in the future\./);
+    assert.match(email12.plainText, /The start date on your application was set to 12\/10\/2026, which is outside the permitted advance booking period\./);
   });
 
   // =========================================================================
@@ -930,7 +930,7 @@ Car Parking Services Team`;
       todayDate: '25/09/2026',
       reason: 'future'
     });
-    assert.match(futureEmail.plainText, /is in the future/);
+    assert.match(futureEmail.plainText, /is outside the permitted advance booking period/);
 
     const expiredEmail = getCancellationEmailContent({
       vrm: 'TEST2',
