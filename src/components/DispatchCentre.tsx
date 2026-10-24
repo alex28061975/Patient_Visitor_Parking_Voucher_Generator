@@ -175,6 +175,17 @@ function DispatchCentreComponent({
   const [localSearchInput, setLocalSearchInput] = useState(initialSearch);
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState(initialSearch);
 
+  // Memoized Sets for fast O(1) dispatch checks across large datasets (~2,000+ records)
+  const dispatchedKeysSet = useMemo(
+    () => new Set(dispatchedKeys || []),
+    [dispatchedKeys]
+  );
+
+  const unsentKeysSet = useMemo(
+    () => new Set(unsentKeys || []),
+    [unsentKeys]
+  );
+
   // Sync local and debounced input when external searchQueryProp changes
   useEffect(() => {
     if (searchQueryProp !== undefined && searchQueryProp !== localSearchInput) {
@@ -270,7 +281,7 @@ function DispatchCentreComponent({
       if (updated) {
         setSelectedRowRecord(prev => {
           if (!prev) return null;
-          const isDisp = checkIsRecordDispatched(updated, updated.vrm, updated.driverName, updated.dateRequired, dispatchedKeys, unsentKeys);
+          const isDisp = checkIsRecordDispatched(updated, updated.vrm, updated.driverName, updated.dateRequired, dispatchedKeysSet, unsentKeysSet);
           return {
             ...prev,
             ...updated,
@@ -282,7 +293,7 @@ function DispatchCentreComponent({
         });
       }
     }
-  }, [database, dispatchedKeys, unsentKeys]);
+  }, [database, dispatchedKeysSet, unsentKeysSet]);
 
   const handleRowClick = (record: CsvPermitRecord) => {
     setSelectedRowRecord(record);
@@ -556,7 +567,7 @@ function DispatchCentreComponent({
     if (selectedRowRecord) {
       const updated = (database || []).find(r => isRecordMatch(r, selectedRowRecord));
       if (updated) {
-        const isDisp = checkIsRecordDispatched(updated, updated.vrm, updated.driverName, updated.dateRequired, dispatchedKeys, unsentKeys);
+        const isDisp = checkIsRecordDispatched(updated, updated.vrm, updated.driverName, updated.dateRequired, dispatchedKeysSet, unsentKeysSet);
         return {
           ...updated,
           replacementCode: isDisp ? undefined : (updated.replacementCode !== undefined ? updated.replacementCode : selectedRowRecord.replacementCode),
@@ -583,7 +594,7 @@ function DispatchCentreComponent({
       }
     }
     return database?.[0] || null;
-  }, [selectedRowRecord, formData, database]);
+  }, [selectedRowRecord, formData, database, dispatchedKeysSet, unsentKeysSet]);
 
   // Current permit exact validFrom and validTo ISO matching for the selected row
   const currentPermitValidFromIso = useMemo(() => {
@@ -864,7 +875,7 @@ function DispatchCentreComponent({
 
   const isReplacementPending = useCallback((record: CsvPermitRecord) => {
     if (!record) return false;
-    const isDisp = checkIsRecordDispatched(record, record.vrm, record.driverName, record.dateRequired, dispatchedKeys, unsentKeys);
+    const isDisp = checkIsRecordDispatched(record, record.vrm, record.driverName, record.dateRequired, dispatchedKeysSet, unsentKeysSet);
     // If the record has been dispatched and doesn't have an unapplied new replacement code, it is NOT pending
     if (isDisp && !record.replacementCode) {
       return false;
@@ -896,7 +907,7 @@ function DispatchCentreComponent({
       return true;
     }
     return false;
-  }, [dispatchedKeys, unsentKeys, selectedRowRecord, formData]);
+  }, [dispatchedKeysSet, unsentKeysSet, selectedRowRecord, formData]);
 
   const getHospital = useCallback((record: CsvPermitRecord) => {
     const raw = String(record?.hospital ?? "").trim();
@@ -987,11 +998,11 @@ function DispatchCentreComponent({
     if (!record) return "PENDING";
     if (isVrmSilentBlockedSync(record.vrm)) return "BLOCKED";
     if (getIsCancelled(record, idx)) return "CANCELLED";
-    const isDispatched = checkIsRecordDispatched(record, record.vrm, record.driverName, record.dateRequired, dispatchedKeys, unsentKeys);
+    const isDispatched = checkIsRecordDispatched(record, record.vrm, record.driverName, record.dateRequired, dispatchedKeysSet, unsentKeysSet);
     if (isDispatched) return "SENT";
     if (isReplacementPending(record)) return "REPLACEMENT";
     return "PENDING";
-  }, [getIsCancelled, dispatchedKeys, unsentKeys, isReplacementPending]);
+  }, [getIsCancelled, dispatchedKeysSet, unsentKeysSet, isReplacementPending]);
 
   // Dynamic stock cache keyed by date range, automatically invalidated when assigned codes or vouchers change
   const rowVoucherStatsCache = useMemo(() => {
@@ -1319,8 +1330,8 @@ function DispatchCentreComponent({
     localDateBounds,
     recordCancellationMap,
     recordTimestampMap,
-    dispatchedKeys,
-    unsentKeys,
+    dispatchedKeysSet,
+    unsentKeysSet,
     formDataReplacementKey
   ]);
 
@@ -1375,7 +1386,7 @@ function DispatchCentreComponent({
           break;
         case "actions": {
           const isCanc = getIsCancelled(r, i);
-          const isDisp = checkIsRecordDispatched(r, r?.vrm, r?.driverName, r?.dateRequired, dispatchedKeys, unsentKeys);
+          const isDisp = checkIsRecordDispatched(r, r?.vrm, r?.driverName, r?.dateRequired, dispatchedKeysSet, unsentKeysSet);
           keyVal = isCanc ? "Unsend" : (isReplacementPending(r) ? "Resend" : (isDisp ? "Unsend" : "Send"));
           break;
         }
@@ -1415,8 +1426,8 @@ function DispatchCentreComponent({
     database,
     processingDate,
     recordCodeMap,
-    dispatchedKeys,
-    unsentKeys,
+    dispatchedKeysSet,
+    unsentKeysSet,
     formDataReplacementKey
   ]);
 
@@ -2092,7 +2103,8 @@ function DispatchCentreComponent({
                   return "";
                 })();
 
-                const isDisp = checkIsRecordDispatched(record, record?.vrm, record?.driverName, record?.dateRequired, dispatchedKeys, unsentKeys);
+                const isDispatched = checkIsRecordDispatched(record, record?.vrm, record?.driverName, record?.dateRequired, dispatchedKeysSet, unsentKeysSet);
+                const isDisp = isDispatched;
                 const replacementPending = !isBlocked && !isDisp && isReplacementPending(record);
                 const recordPk = getRecordPrimaryKey(record) || record?.vrm || String(record?.id || "");
                 const cleanVrmKey = record?.vrm ? record.vrm.toUpperCase().replace(/\s+/g, "") : "";
@@ -2158,8 +2170,6 @@ function DispatchCentreComponent({
                   }
                 }
                 const rowKey = String(record.formId ?? record.id ?? record.vrm ?? index);
-
-                const isDispatched = checkIsRecordDispatched(record, record.vrm, record.driverName, record.dateRequired, dispatchedKeys, unsentKeys);
 
                 const excelId = (() => {
                   if (record.formId !== undefined && record.formId !== null) {

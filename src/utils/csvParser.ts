@@ -2531,15 +2531,17 @@ export function getSpreadsheetMatchingAllocationsMap(
     list.push(v);
 
     if (isVoucherAvailableStatus(v)) {
-      const vFrom = v.validFrom || "";
-      const vTo = v.validTo || "";
-      const key = `${vFrom}_${vTo}`;
-      let pList = availableVouchersByPeriod.get(key);
-      if (!pList) {
-        pList = [];
-        availableVouchersByPeriod.set(key, pList);
+      const vFrom = getVoucherValidFromISO(v);
+      const vTo = getVoucherValidToISO(v);
+      if (vFrom && vTo) {
+        const key = `${vFrom}_${vTo}`;
+        let pList = availableVouchersByPeriod.get(key);
+        if (!pList) {
+          pList = [];
+          availableVouchersByPeriod.set(key, pList);
+        }
+        pList.push(v);
       }
-      pList.push(v);
     }
   });
 

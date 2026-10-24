@@ -27,7 +27,7 @@ import { INITIAL_DEMO_CSV } from "./data/defaultCsv";
 import { isVrmSilentBlockedSync } from "./lib/blocklist";
 import { CsvPermitRecord, parsePermitCsv, parseDateToISO, addDays, formatPhoneNumber, ParsedVoucherData, addDaysSafe, parseDateRange, getDatesInRange, cleanVoucherCodeValue, exportToExcel, isVoucherCodeMatch, sortRecordsByFormIdDesc, getMatchingPermits, isDateRequiredOutsideValidWindow, isPermitExpiredBackdate, getTodayISO, checkIsBlockedDuplicate, parseFullDateTimeMs, normalizeVouchersList, isRecordCancelled, getRequestedPermitDateISO, isVoucherExactPeriodEligible, isVoucherAvailableStatus, isVoucherVrmCompatible, clearDuplicateCheckCache, extractRecordSubmissionTimeMs, extractRecordNumericFormId } from "./utils/csvParser";
 // ⭐ FIX: Import canonical voucher validation helper
-import { isVoucherForPermitDateRange, validateManualVoucherChange } from "./utils/voucherValidation";
+import { isVoucherForPermitDateRange, validateManualVoucherChange, getVoucherValidFromISO, getVoucherValidToISO } from "./utils/voucherValidation";
 import { CsvDatabasePanel, type CsvDatabasePanelHandle } from "./components/CsvDatabasePanel";
 import { BlocklistPanel } from "./components/BlocklistPanel";
 import { EditRecordModal } from "./components/EditRecordModal";
@@ -454,13 +454,17 @@ export function enrichRecordsWithVouchers(
     }
 
     if (isVoucherAvailableStatus(v)) {
-      const pKey = `${v.validFrom || ""}_${v.validTo || ""}`;
-      let pList = availableVouchersByPeriod.get(pKey);
-      if (!pList) {
-        pList = [];
-        availableVouchersByPeriod.set(pKey, pList);
+      const vFrom = getVoucherValidFromISO(v);
+      const vTo = getVoucherValidToISO(v);
+      if (vFrom && vTo) {
+        const pKey = `${vFrom}_${vTo}`;
+        let pList = availableVouchersByPeriod.get(pKey);
+        if (!pList) {
+          pList = [];
+          availableVouchersByPeriod.set(pKey, pList);
+        }
+        pList.push(v);
       }
-      pList.push(v);
     }
   });
 
