@@ -1525,7 +1525,7 @@ CON_ERR_2,,`;
 
   // =========================================================================
   // TEST 28 — First-send QR code email template, subject, body, and dates
-  // Target: Your QR Code Credentials - {VRM}
+  // Target: Your Parking Concession – {VRM}
   // Body must match NHS first-send template.
   // =========================================================================
   it('TEST 28: First-send QR code email template produces expected subject, body, and dates', () => {
@@ -1537,7 +1537,7 @@ CON_ERR_2,,`;
       duration: '7 days',
     });
 
-    assert.equal(email.subject, 'Your QR Code Credentials - AB12CDE');
+    assert.equal(email.subject, 'Your Parking Concession – AB12CDE');
     assert.ok(email.plainText.startsWith('Dear Jane Doe,'));
     assert.ok(email.plainText.includes('Please find attached your parking concession QR code for vehicle AB12CDE.'));
     assert.ok(email.plainText.includes('Select Concession'));

@@ -352,7 +352,7 @@ export function getSendEmailContent(params: EmailTemplateParams): EmailContentRe
   const duration = params.duration || "7 days";
   const { validFrom, validExpiry } = deriveDateRangeForEmail(params);
 
-  const subject = `Your QR Code Credentials - ${vrm}`;
+  const subject = `Your Parking Concession – ${vrm}`;
 
   const plainText = `Dear ${driverName},
 
