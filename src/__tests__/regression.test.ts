@@ -1523,6 +1523,7 @@ CON_ERR_2,,`;
     // Verify it does NOT contain first-send copy or old replacement copy
     assert.equal(email.plainText.includes('Please find attached your concession QR code.'), false);
     assert.equal(email.plainText.includes('On your first day of parking'), false);
+    assert.ok(email.htmlText.includes('<span style="color: #C00000; font-weight: bold;">non-refundable</span>'));
   });
 
   // =========================================================================
@@ -1553,6 +1554,7 @@ CON_ERR_2,,`;
     // Verify it does NOT contain replacement copy
     assert.equal(email.plainText.includes('replacement concession QR code'), false);
     assert.equal(email.plainText.includes('On your next visit'), false);
+    assert.ok(email.htmlText.includes('<span style="color: #C00000; font-weight: bold;">non-refundable</span>'));
   });
 
 });
