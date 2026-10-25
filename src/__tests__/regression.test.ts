@@ -473,7 +473,7 @@ Barts Health NHS Trust`;
       reason: details.reason
     });
     assert.match(email.subject, /Cancelled: Concession Permit – EX26OLD/);
-    assert.match(email.plainText, /The 7-day validity period for this concession has ended/i);
+    assert.match(email.plainText, /The start date on your application was 10\/09\/2026, and the 7-day validity period for this concession has now ended/i);
   });
 
   // =========================================================================
@@ -522,7 +522,7 @@ Barts Health NHS Trust`;
       earliestRenewalDate: details.earliestRenewalDate
     });
     assert.match(email.subject, /Cancelled: Concession Permit – DP24VRM/);
-    assert.match(email.plainText, /already has an active permit valid through/i);
+    assert.match(email.plainText, /already has an active parking concession valid until/i);
   });
 
   // =========================================================================
@@ -938,7 +938,7 @@ Barts Health NHS Trust`;
       validFrom: '01/09/2026',
       reason: 'expired'
     });
-    assert.match(expiredEmail.plainText, /7-day validity period for this concession has ended/);
+    assert.match(expiredEmail.plainText, /The start date on your application was 01\/09\/2026, and the 7-day validity period for this concession has now ended\. As the concession can no longer be issued for this period, your request has been cancelled\./);
 
     const duplicateEmail = getCancellationEmailContent({
       vrm: 'TEST3',
@@ -948,8 +948,8 @@ Barts Health NHS Trust`;
       currentExpiryDate: '25/09/2026',
       earliestRenewalDate: '26/09/2026'
     });
-    assert.match(duplicateEmail.plainText, /already has an active permit valid through 25\/09\/2026/);
-    assert.match(duplicateEmail.plainText, /submit a new concession request from 26\/09\/2026/);
+    assert.match(duplicateEmail.plainText, /already has an active parking concession valid until 25\/09\/2026\. Your new request has therefore been cancelled\./);
+    assert.match(duplicateEmail.plainText, /submit a new concession request from 26\/09\/2026\./);
   });
 
   // =========================================================================
@@ -1481,7 +1481,7 @@ CON_ERR_2,,`;
       earliestRenewalDate: details.earliestRenewalDate
     });
 
-    assert.match(email.plainText, /The 7-day validity period for this concession has ended, so your request has been cancelled\./);
+    assert.match(email.plainText, /The start date on your application was 23\/07\/2026, and the 7-day validity period for this concession has now ended\. As the concession can no longer be issued for this period, your request has been cancelled\./);
     assert.doesNotMatch(email.plainText, /already has an active permit valid through/);
   });
 
@@ -1508,24 +1508,25 @@ CON_ERR_2,,`;
     });
 
     assert.equal(email.subject, 'Replacement Parking Concession – AB12CDE');
-    assert.match(email.plainText, /^\nDear Jane Doe,/);
-    assert.match(email.plainText, /Please find attached your replacement concession QR code\. We apologise for any inconvenience caused by the previous code\./);
-    assert.match(email.plainText, /Please use this replacement QR code instead of your previous QR code\./);
-    assert.match(email.plainText, /On your next visit, please take the replacement QR code to the pay machine, press Concession, and enter vehicle registration number AB12CDE\./);
-    assert.match(email.plainText, /The machine will then ask you to scan a blue badge or concession\. Please scan your replacement QR code at this point\./);
-    assert.match(email.plainText, /Your concession will allow you to park for 7 days, from 10\/10\/2026 to 16\/10\/2026\./);
-    assert.match(email.plainText, /Please note that concession payments are non-refundable\./);
-    assert.match(email.plainText, /If you continue to experience any issues or have any further queries, please contact: parkingadminbh\.bartshealth@nhs\.net/);
-    assert.match(email.plainText, /Kind regards,\nBarts Health NHS Trust\nCar Parking Services Team$/);
+    assert.ok(email.plainText.startsWith('Dear Jane Doe,'));
+    assert.ok(email.plainText.includes('replacement parking concession QR code'));
+    assert.ok(email.plainText.includes('apologise for any inconvenience caused'));
+    assert.ok(email.plainText.includes('Select Concession'));
+    assert.ok(email.plainText.includes('AB12CDE'));
+    assert.ok(email.plainText.includes('When prompted to scan a Blue Badge or concession'));
+    assert.ok(email.plainText.includes('Your concession is valid for 7 days, from 10/10/2026 to 16/10/2026.'));
+    assert.ok(email.plainText.includes('concession payments are non-refundable.'));
+    assert.ok(email.plainText.includes('parkingadminbh.bartshealth@nhs.net'));
+    assert.ok(email.plainText.endsWith('Kind regards,\nCar Parking Services Team\nBarts Health NHS Trust'));
 
     // Verify it does NOT contain first-send copy
-    assert.doesNotMatch(email.plainText, /On your first day of parking/);
+    assert.equal(email.plainText.includes('Please find attached your concession QR code.'), false);
   });
 
   // =========================================================================
   // TEST 28 — First-send QR code email template, subject, body, and dates
   // Target: Your QR Code Credentials - {VRM}
-  // Body must match NHS first-send template with leading blank line.
+  // Body must match NHS first-send template.
   // =========================================================================
   it('TEST 28: First-send QR code email template produces expected subject, body, and dates', () => {
     const email = getSendEmailContent({
@@ -1537,18 +1538,19 @@ CON_ERR_2,,`;
     });
 
     assert.equal(email.subject, 'Your QR Code Credentials - AB12CDE');
-    assert.match(email.plainText, /^\nDear Jane Doe,/);
-    assert.match(email.plainText, /Please find attached your concession QR code\./);
-    assert.match(email.plainText, /On your first day of parking, please take the QR code to the pay machine, press Concession, and enter vehicle registration number AB12CDE\./);
-    assert.match(email.plainText, /The machine will then ask you to scan a blue badge or concession\. Please scan your QR code at this point\./);
-    assert.match(email.plainText, /Your concession will allow you to park for 7 days, from 10\/10\/2026 to 16\/10\/2026\./);
-    assert.match(email.plainText, /Please note that concession payments are non-refundable\./);
-    assert.match(email.plainText, /If you have any queries, please contact: parkingadminbh\.bartshealth@nhs\.net/);
-    assert.match(email.plainText, /Kind regards,\nBarts Health NHS Trust\nCar Parking Services Team$/);
+    assert.ok(email.plainText.startsWith('Dear Jane Doe,'));
+    assert.ok(email.plainText.includes('Please find attached your parking concession QR code for vehicle AB12CDE.'));
+    assert.ok(email.plainText.includes('Select Concession'));
+    assert.ok(email.plainText.includes('AB12CDE'));
+    assert.ok(email.plainText.includes('When prompted to scan a Blue Badge or concession'));
+    assert.ok(email.plainText.includes('Your concession is valid for 7 days, from 10/10/2026 to 16/10/2026.'));
+    assert.ok(email.plainText.includes('concession payments are non-refundable.'));
+    assert.ok(email.plainText.includes('parkingadminbh.bartshealth@nhs.net'));
+    assert.ok(email.plainText.endsWith('Kind regards,\nCar Parking Services Team\nBarts Health NHS Trust'));
 
     // Verify it does NOT contain replacement copy
-    assert.doesNotMatch(email.plainText, /replacement concession QR code/);
-    assert.doesNotMatch(email.plainText, /On your next visit/);
+    assert.equal(email.plainText.includes('replacement concession QR code'), false);
+    assert.equal(email.plainText.includes('On your next visit'), false);
   });
 
 });

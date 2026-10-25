@@ -354,37 +354,32 @@ export function getSendEmailContent(params: EmailTemplateParams): EmailContentRe
 
   const subject = `Your QR Code Credentials - ${vrm}`;
 
-  const plainText = `
-Dear ${driverName},
+  const plainText = `Dear ${driverName},
 
-Please find attached your concession QR code.
+Please find attached your parking concession QR code for vehicle ${vrm}.
 
-On your first day of parking, please take the QR code to the pay machine, press Concession, and enter vehicle registration number ${vrm}.
+On your first day of parking, please take your QR code to the pay machine. Select Concession and enter your vehicle registration number ${vrm}. When prompted to scan a Blue Badge or concession, scan your QR code.
 
-The machine will then ask you to scan a blue badge or concession. Please scan your QR code at this point.
-
-Your concession will allow you to park for ${duration}, from ${validFrom} to ${validExpiry}.
+Your concession is valid for ${duration}, from ${validFrom} to ${validExpiry}.
 
 Please note that concession payments are non-refundable.
 
 If you have any queries, please contact: ${NHS_SUPPORT_EMAIL}
 
 Kind regards,
-Barts Health NHS Trust
-Car Parking Services Team`;
+Car Parking Services Team
+Barts Health NHS Trust`;
 
   const htmlText = `<div style="font-family: Calibri, Arial, sans-serif; font-size: 11pt; color: #000000; line-height: 1.35;">
-<br/>
 Dear ${driverName},<br/><br/>
-Please find attached your concession QR code.<br/><br/>
-On your first day of parking, please take the QR code to the pay machine, press Concession, and enter vehicle registration number <strong>${vrm}</strong>.<br/><br/>
-The machine will then ask you to scan a blue badge or concession. Please scan your QR code at this point.<br/><br/>
-Your concession will allow you to park for ${duration}, from ${validFrom} to ${validExpiry}.<br/><br/>
+Please find attached your parking concession QR code for vehicle <strong>${vrm}</strong>.<br/><br/>
+On your first day of parking, please take your QR code to the pay machine. Select Concession and enter your vehicle registration number <strong>${vrm}</strong>. When prompted to scan a Blue Badge or concession, scan your QR code.<br/><br/>
+Your concession is valid for ${duration}, from ${validFrom} to ${validExpiry}.<br/><br/>
 Please note that concession payments are non-refundable.<br/><br/>
 If you have any queries, please contact: <a href="mailto:${NHS_SUPPORT_EMAIL}" style="color: #005EB8; text-decoration: underline;">${NHS_SUPPORT_EMAIL}</a><br/><br/>
 Kind regards,<br/>
-Barts Health NHS Trust<br/>
-Car Parking Services Team
+Car Parking Services Team<br/>
+Barts Health NHS Trust
 </div>`;
 
   return { subject, plainText, htmlText };
@@ -401,44 +396,39 @@ export function getReplacementEmailContent(params: EmailTemplateParams): EmailCo
 
   const subject = `Replacement Parking Concession – ${vrm}`;
 
-  const plainText = `
-Dear ${driverName},
+  const plainText = `Dear ${driverName},
 
-Please find attached your replacement concession QR code. We apologise for any inconvenience caused by the previous code.
+Please find attached your replacement parking concession QR code for vehicle ${vrm}. We apologise for any inconvenience caused by the previous code.
 
 Please use this replacement QR code instead of your previous QR code.
 
-On your next visit, please take the replacement QR code to the pay machine, press Concession, and enter vehicle registration number ${vrm}.
+On your first day of parking, please take your replacement QR code to the pay machine. Select Concession and enter your vehicle registration number ${vrm}. When prompted to scan a Blue Badge or concession, scan your replacement QR code.
 
-The machine will then ask you to scan a blue badge or concession. Please scan your replacement QR code at this point.
-
-Your concession will allow you to park for ${duration}, from ${validFrom} to ${validExpiry}.
+Your concession is valid for ${duration}, from ${validFrom} to ${validExpiry}.
 
 Please note that concession payments are non-refundable.
 
 If you continue to experience any issues or have any further queries, please contact: ${NHS_SUPPORT_EMAIL}
 
 Kind regards,
-Barts Health NHS Trust
-Car Parking Services Team`;
+Car Parking Services Team
+Barts Health NHS Trust`;
 
   const trackingPixel = params.trackingPixelUrl
     ? `<img src="${params.trackingPixelUrl}" width="1" height="1" alt="" style="display:none;width:1px;height:1px;border:0;" />`
     : "";
 
   const htmlText = `<div style="font-family: Calibri, Arial, sans-serif; font-size: 11pt; color: #000000; line-height: 1.35;">
-<br/>
 Dear ${driverName},<br/><br/>
-Please find attached your replacement concession QR code. We apologise for any inconvenience caused by the previous code.<br/><br/>
+Please find attached your replacement parking concession QR code for vehicle <strong>${vrm}</strong>. We apologise for any inconvenience caused by the previous code.<br/><br/>
 Please use this replacement QR code instead of your previous QR code.<br/><br/>
-On your next visit, please take the replacement QR code to the pay machine, press Concession, and enter vehicle registration number <strong>${vrm}</strong>.<br/><br/>
-The machine will then ask you to scan a blue badge or concession. Please scan your replacement QR code at this point.<br/><br/>
-Your concession will allow you to park for ${duration}, from ${validFrom} to ${validExpiry}.<br/><br/>
+On your first day of parking, please take your replacement QR code to the pay machine. Select Concession and enter your vehicle registration number <strong>${vrm}</strong>. When prompted to scan a Blue Badge or concession, scan your replacement QR code.<br/><br/>
+Your concession is valid for ${duration}, from ${validFrom} to ${validExpiry}.<br/><br/>
 Please note that concession payments are non-refundable.<br/><br/>
 If you continue to experience any issues or have any further queries, please contact: <a href="mailto:${NHS_SUPPORT_EMAIL}" style="color: #005EB8; text-decoration: underline;">${NHS_SUPPORT_EMAIL}</a><br/><br/>
 Kind regards,<br/>
-Barts Health NHS Trust<br/>
-Car Parking Services Team
+Car Parking Services Team<br/>
+Barts Health NHS Trust
 ${trackingPixel}
 </div>`;
 
@@ -586,50 +576,50 @@ export function getCancellationEmailContent(
 
 We have received your parking concession request for vehicle ${vrm}.
 
-Our records show that this vehicle already has an active permit valid through ${currentExpiry}. Your new concession request has been cancelled because your current permit is still active.
+Our records show that this vehicle already has an active parking concession valid until ${currentExpiry}. Your new request has therefore been cancelled.
 
-You can submit a new concession request from ${earliestRenewal}, after your current permit expires.
+If you still require parking after your current concession expires, you can submit a new concession request from ${earliestRenewal}.
 
 If you continue to experience any issues or have any further queries, please contact: ${NHS_SUPPORT_EMAIL}
 
 Kind regards,
-Barts Health NHS Trust
-Car Parking Services Team`;
+Car Parking Services Team
+Barts Health NHS Trust`;
 
     htmlText = `<div style="font-family: Calibri, Arial, sans-serif; font-size: 11pt; color: #000000; line-height: 1.35;">
 Dear ${driverName},<br/><br/>
 We have received your parking concession request for vehicle <strong>${vrm}</strong>.<br/><br/>
-Our records show that this vehicle already has an active permit valid through ${currentExpiry}. Your new concession request has been cancelled because your current permit is still active.<br/><br/>
-You can submit a new concession request from ${earliestRenewal}, after your current permit expires.<br/><br/>
+Our records show that this vehicle already has an active parking concession valid until ${currentExpiry}. Your new request has therefore been cancelled.<br/><br/>
+If you still require parking after your current concession expires, you can submit a new concession request from ${earliestRenewal}.<br/><br/>
 If you continue to experience any issues or have any further queries, please contact: <a href="mailto:${NHS_SUPPORT_EMAIL}" style="color: #005EB8; text-decoration: underline;">${NHS_SUPPORT_EMAIL}</a><br/><br/>
 Kind regards,<br/>
-Barts Health NHS Trust<br/>
-Car Parking Services Team
+Car Parking Services Team<br/>
+Barts Health NHS Trust
 </div>`;
   } else if (reason === 'expired') {
     plainText = `Dear ${driverName},
 
 We have received your parking concession request for vehicle ${vrm}.
 
-The 7-day validity period for this concession has ended, so your request has been cancelled.
+The start date on your application was ${validFrom}, and the 7-day validity period for this concession has now ended. As the concession can no longer be issued for this period, your request has been cancelled.
 
-If you require a new concession, please contact your ward or department to submit a new concession request.
+If you still require parking, please contact your ward or department to submit a new concession request with the correct start date.
 
 If you continue to experience any issues or have any further queries, please contact: ${NHS_SUPPORT_EMAIL}
 
 Kind regards,
-Barts Health NHS Trust
-Car Parking Services Team`;
+Car Parking Services Team
+Barts Health NHS Trust`;
 
     htmlText = `<div style="font-family: Calibri, Arial, sans-serif; font-size: 11pt; color: #000000; line-height: 1.35;">
 Dear ${driverName},<br/><br/>
 We have received your parking concession request for vehicle <strong>${vrm}</strong>.<br/><br/>
-The 7-day validity period for this concession has ended, so your request has been cancelled.<br/><br/>
-If you require a new concession, please contact your ward or department to submit a new concession request.<br/><br/>
+The start date on your application was ${validFrom}, and the 7-day validity period for this concession has now ended. As the concession can no longer be issued for this period, your request has been cancelled.<br/><br/>
+If you still require parking, please contact your ward or department to submit a new concession request with the correct start date.<br/><br/>
 If you continue to experience any issues or have any further queries, please contact: <a href="mailto:${NHS_SUPPORT_EMAIL}" style="color: #005EB8; text-decoration: underline;">${NHS_SUPPORT_EMAIL}</a><br/><br/>
 Kind regards,<br/>
-Barts Health NHS Trust<br/>
-Car Parking Services Team
+Car Parking Services Team<br/>
+Barts Health NHS Trust
 </div>`;
   } else {
     // Default / 'future': Date Invalid (Future)
