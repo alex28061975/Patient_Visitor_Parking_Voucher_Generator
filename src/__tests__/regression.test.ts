@@ -1511,7 +1511,8 @@ CON_ERR_2,,`;
     assert.ok(email.plainText.includes('Dear Jane Doe,'));
     assert.ok(email.plainText.includes('replacement parking concession QR code'));
     assert.ok(email.plainText.includes('apologise for any inconvenience caused'));
-    assert.ok(email.plainText.includes('Select Concession'));
+    assert.ok(email.plainText.includes('On your next visit'));
+    assert.ok(email.plainText.includes('select Concession'));
     assert.ok(email.plainText.includes('AB12CDE'));
     assert.ok(email.plainText.includes('When prompted to scan a Blue Badge or concession'));
     assert.ok(email.plainText.includes('Your concession is valid for 7 days, from 10/10/2026 to 16/10/2026.'));
@@ -1519,8 +1520,9 @@ CON_ERR_2,,`;
     assert.ok(email.plainText.includes('parkingadminbh.bartshealth@nhs.net'));
     assert.ok(email.plainText.endsWith('Kind regards,\nCar Parking Services Team\nBarts Health NHS Trust'));
 
-    // Verify it does NOT contain first-send copy
+    // Verify it does NOT contain first-send copy or old replacement copy
     assert.equal(email.plainText.includes('Please find attached your concession QR code.'), false);
+    assert.equal(email.plainText.includes('On your first day of parking'), false);
   });
 
   // =========================================================================
@@ -1540,7 +1542,7 @@ CON_ERR_2,,`;
     assert.equal(email.subject, 'Your Parking Concession – AB12CDE');
     assert.ok(email.plainText.includes('Dear Jane Doe,'));
     assert.ok(email.plainText.includes('Please find attached your parking concession QR code for vehicle AB12CDE.'));
-    assert.ok(email.plainText.includes('Select Concession'));
+    assert.ok(email.plainText.includes('select Concession'));
     assert.ok(email.plainText.includes('AB12CDE'));
     assert.ok(email.plainText.includes('When prompted to scan a Blue Badge or concession'));
     assert.ok(email.plainText.includes('Your concession is valid for 7 days, from 10/10/2026 to 16/10/2026.'));

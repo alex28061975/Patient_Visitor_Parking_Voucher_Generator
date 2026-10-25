@@ -359,7 +359,9 @@ Dear ${driverName},
 
 Please find attached your parking concession QR code for vehicle ${vrm}.
 
-On your first day of parking, please take your QR code to the pay machine. Select Concession and enter your vehicle registration number ${vrm}. When prompted to scan a Blue Badge or concession, scan your QR code.
+On your first day of parking, please take your QR code to the pay machine, select Concession and enter your vehicle registration number ${vrm}.
+
+When prompted to scan a Blue Badge or concession, please scan your QR code.
 
 Your concession is valid for ${duration}, from ${validFrom} to ${validExpiry}.
 
@@ -375,7 +377,8 @@ Barts Health NHS Trust`;
 <br/>
 Dear ${driverName},<br/><br/>
 Please find attached your parking concession QR code for vehicle <strong>${vrm}</strong>.<br/><br/>
-On your first day of parking, please take your QR code to the pay machine. Select Concession and enter your vehicle registration number <strong>${vrm}</strong>. When prompted to scan a Blue Badge or concession, scan your QR code.<br/><br/>
+On your first day of parking, please take your QR code to the pay machine, select Concession and enter your vehicle registration number <strong>${vrm}</strong>.<br/><br/>
+When prompted to scan a Blue Badge or concession, please scan your QR code.<br/><br/>
 Your concession is valid for ${duration}, from ${validFrom} to ${validExpiry}.<br/><br/>
 Please note that concession payments are non-refundable.<br/><br/>
 If you have any queries, please contact: <a href="mailto:${NHS_SUPPORT_EMAIL}" style="color: #005EB8; text-decoration: underline;">${NHS_SUPPORT_EMAIL}</a><br/><br/>
@@ -405,7 +408,9 @@ Please find attached your replacement parking concession QR code for vehicle ${v
 
 Please use this replacement QR code instead of your previous QR code.
 
-On your first day of parking, please take your replacement QR code to the pay machine. Select Concession and enter your vehicle registration number ${vrm}. When prompted to scan a Blue Badge or concession, scan your replacement QR code.
+On your next visit, please take your replacement QR code to the pay machine, select Concession and enter your vehicle registration number ${vrm}.
+
+When prompted to scan a Blue Badge or concession, please scan your replacement QR code.
 
 Your concession is valid for ${duration}, from ${validFrom} to ${validExpiry}.
 
@@ -426,7 +431,8 @@ Barts Health NHS Trust`;
 Dear ${driverName},<br/><br/>
 Please find attached your replacement parking concession QR code for vehicle <strong>${vrm}</strong>. We apologise for any inconvenience caused by the previous code.<br/><br/>
 Please use this replacement QR code instead of your previous QR code.<br/><br/>
-On your first day of parking, please take your replacement QR code to the pay machine. Select Concession and enter your vehicle registration number <strong>${vrm}</strong>. When prompted to scan a Blue Badge or concession, scan your replacement QR code.<br/><br/>
+On your next visit, please take your replacement QR code to the pay machine, select Concession and enter your vehicle registration number <strong>${vrm}</strong>.<br/><br/>
+When prompted to scan a Blue Badge or concession, please scan your replacement QR code.<br/><br/>
 Your concession is valid for ${duration}, from ${validFrom} to ${validExpiry}.<br/><br/>
 Please note that concession payments are non-refundable.<br/><br/>
 If you continue to experience any issues or have any further queries, please contact: <a href="mailto:${NHS_SUPPORT_EMAIL}" style="color: #005EB8; text-decoration: underline;">${NHS_SUPPORT_EMAIL}</a><br/><br/>
