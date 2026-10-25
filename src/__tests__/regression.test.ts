@@ -1508,7 +1508,7 @@ CON_ERR_2,,`;
     });
 
     assert.equal(email.subject, 'Replacement Parking Concession – AB12CDE');
-    assert.ok(email.plainText.startsWith('Dear Jane Doe,'));
+    assert.ok(email.plainText.includes('Dear Jane Doe,'));
     assert.ok(email.plainText.includes('replacement parking concession QR code'));
     assert.ok(email.plainText.includes('apologise for any inconvenience caused'));
     assert.ok(email.plainText.includes('Select Concession'));
@@ -1538,7 +1538,7 @@ CON_ERR_2,,`;
     });
 
     assert.equal(email.subject, 'Your Parking Concession – AB12CDE');
-    assert.ok(email.plainText.startsWith('Dear Jane Doe,'));
+    assert.ok(email.plainText.includes('Dear Jane Doe,'));
     assert.ok(email.plainText.includes('Please find attached your parking concession QR code for vehicle AB12CDE.'));
     assert.ok(email.plainText.includes('Select Concession'));
     assert.ok(email.plainText.includes('AB12CDE'));

@@ -354,7 +354,8 @@ export function getSendEmailContent(params: EmailTemplateParams): EmailContentRe
 
   const subject = `Your Parking Concession – ${vrm}`;
 
-  const plainText = `Dear ${driverName},
+  const plainText = `
+Dear ${driverName},
 
 Please find attached your parking concession QR code for vehicle ${vrm}.
 
@@ -371,6 +372,7 @@ Car Parking Services Team
 Barts Health NHS Trust`;
 
   const htmlText = `<div style="font-family: Calibri, Arial, sans-serif; font-size: 11pt; color: #000000; line-height: 1.35;">
+<br/>
 Dear ${driverName},<br/><br/>
 Please find attached your parking concession QR code for vehicle <strong>${vrm}</strong>.<br/><br/>
 On your first day of parking, please take your QR code to the pay machine. Select Concession and enter your vehicle registration number <strong>${vrm}</strong>. When prompted to scan a Blue Badge or concession, scan your QR code.<br/><br/>
@@ -396,7 +398,8 @@ export function getReplacementEmailContent(params: EmailTemplateParams): EmailCo
 
   const subject = `Replacement Parking Concession – ${vrm}`;
 
-  const plainText = `Dear ${driverName},
+  const plainText = `
+Dear ${driverName},
 
 Please find attached your replacement parking concession QR code for vehicle ${vrm}. We apologise for any inconvenience caused by the previous code.
 
@@ -419,6 +422,7 @@ Barts Health NHS Trust`;
     : "";
 
   const htmlText = `<div style="font-family: Calibri, Arial, sans-serif; font-size: 11pt; color: #000000; line-height: 1.35;">
+<br/>
 Dear ${driverName},<br/><br/>
 Please find attached your replacement parking concession QR code for vehicle <strong>${vrm}</strong>. We apologise for any inconvenience caused by the previous code.<br/><br/>
 Please use this replacement QR code instead of your previous QR code.<br/><br/>
