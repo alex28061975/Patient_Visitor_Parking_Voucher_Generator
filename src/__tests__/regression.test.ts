@@ -312,7 +312,7 @@ describe('ParkPass Concessions Regression Test Suite', () => {
       todayDate: futureRecord.todayDate,
       reason: details.reason
     });
-    assert.match(email.subject, /Cancelled: Concession Permit – FU26TUE/);
+    assert.match(email.subject, /Cancelled: Parking Concession – FU26TUE/);
     assert.match(email.plainText, /is outside the permitted advance booking period/i);
   });
 
@@ -400,16 +400,16 @@ describe('ParkPass Concessions Regression Test Suite', () => {
       submissionDate: futureRec11.submissionDate,
       reason: details11.reason
     });
-    assert.equal(email11.subject, 'Cancelled: Concession Permit – AB12CDE');
+    assert.equal(email11.subject, 'Cancelled: Parking Concession – AB12CDE');
     const expectedBody11 = `Dear Test Driver,
 
 We have received your parking concession request for vehicle AB12CDE.
 
-The start date on your application was set to 11/10/2026, which is outside the permitted advance booking period. To prevent issuing an invalid concession and reduce the risk of a Parking Charge Notice (PCN) being issued, this request has been cancelled.
+The start date on your application was set to 11/10/2026, which is outside the permitted advance booking period. To prevent an invalid concession from being issued and to reduce the risk of a Parking Charge Notice (PCN), this request has been cancelled.
 
 If you still require parking, please contact your ward or department to submit a new concession request with the correct start date.
 
-If you continue to experience any issues or have any further queries, please contact: parkingadminbh.bartshealth@nhs.net
+If you have any queries, please contact: parkingadminbh.bartshealth@nhs.net
 
 Kind regards,
 Car Parking Services Team
@@ -472,7 +472,7 @@ Barts Health NHS Trust`;
       validFrom: expiredRecord.validFrom,
       reason: details.reason
     });
-    assert.match(email.subject, /Cancelled: Concession Permit – EX26OLD/);
+    assert.match(email.subject, /Cancelled: Parking Concession – EX26OLD/);
     assert.match(email.plainText, /The start date on your application was 10\/09\/2026, and the 7-day validity period for this concession has now ended/i);
   });
 
@@ -521,7 +521,7 @@ Barts Health NHS Trust`;
       currentExpiryDate: details.currentExpiryDate,
       earliestRenewalDate: details.earliestRenewalDate
     });
-    assert.match(email.subject, /Cancelled: Concession Permit – DP24VRM/);
+    assert.match(email.subject, /Cancelled: Parking Concession – DP24VRM/);
     assert.match(email.plainText, /already has an active parking concession valid until/i);
   });
 

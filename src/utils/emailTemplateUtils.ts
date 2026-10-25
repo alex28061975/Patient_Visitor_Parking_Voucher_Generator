@@ -545,7 +545,7 @@ export function getCancellationEmailContent(
     }
   }
 
-  const subject = `Cancelled: Concession Permit – ${vrm}`;
+  const subject = `Cancelled: Parking Concession – ${vrm}`;
 
   let plainText = "";
   let htmlText = "";
@@ -586,11 +586,11 @@ export function getCancellationEmailContent(
 
 We have received your parking concession request for vehicle ${vrm}.
 
-Our records show that this vehicle already has an active parking concession valid until ${currentExpiry}. Your new request has therefore been cancelled.
+Our records indicate that this vehicle already has an active parking concession valid until ${currentExpiry}. Your new request has therefore been cancelled.
 
 If you still require parking after your current concession expires, you can submit a new concession request from ${earliestRenewal}.
 
-If you continue to experience any issues or have any further queries, please contact: ${NHS_SUPPORT_EMAIL}
+If you have any queries, please contact: ${NHS_SUPPORT_EMAIL}
 
 Kind regards,
 Car Parking Services Team
@@ -599,9 +599,9 @@ Barts Health NHS Trust`;
     htmlText = `<div style="font-family: Calibri, Arial, sans-serif; font-size: 11pt; color: #000000; line-height: 1.35;">
 Dear ${driverName},<br/><br/>
 We have received your parking concession request for vehicle <strong>${vrm}</strong>.<br/><br/>
-Our records show that this vehicle already has an active parking concession valid until ${currentExpiry}. Your new request has therefore been cancelled.<br/><br/>
+Our records indicate that this vehicle already has an active parking concession valid until ${currentExpiry}. Your new request has therefore been cancelled.<br/><br/>
 If you still require parking after your current concession expires, you can submit a new concession request from ${earliestRenewal}.<br/><br/>
-If you continue to experience any issues or have any further queries, please contact: <a href="mailto:${NHS_SUPPORT_EMAIL}" style="color: #005EB8; text-decoration: underline;">${NHS_SUPPORT_EMAIL}</a><br/><br/>
+If you have any queries, please contact: <a href="mailto:${NHS_SUPPORT_EMAIL}" style="color: #005EB8; text-decoration: underline;">${NHS_SUPPORT_EMAIL}</a><br/><br/>
 Kind regards,<br/>
 Car Parking Services Team<br/>
 Barts Health NHS Trust
@@ -615,7 +615,7 @@ The start date on your application was ${validFrom}, and the 7-day validity peri
 
 If you still require parking, please contact your ward or department to submit a new concession request with the correct start date.
 
-If you continue to experience any issues or have any further queries, please contact: ${NHS_SUPPORT_EMAIL}
+If you have any queries, please contact: ${NHS_SUPPORT_EMAIL}
 
 Kind regards,
 Car Parking Services Team
@@ -626,7 +626,7 @@ Dear ${driverName},<br/><br/>
 We have received your parking concession request for vehicle <strong>${vrm}</strong>.<br/><br/>
 The start date on your application was ${validFrom}, and the 7-day validity period for this concession has now ended. As the concession can no longer be issued for this period, your request has been cancelled.<br/><br/>
 If you still require parking, please contact your ward or department to submit a new concession request with the correct start date.<br/><br/>
-If you continue to experience any issues or have any further queries, please contact: <a href="mailto:${NHS_SUPPORT_EMAIL}" style="color: #005EB8; text-decoration: underline;">${NHS_SUPPORT_EMAIL}</a><br/><br/>
+If you have any queries, please contact: <a href="mailto:${NHS_SUPPORT_EMAIL}" style="color: #005EB8; text-decoration: underline;">${NHS_SUPPORT_EMAIL}</a><br/><br/>
 Kind regards,<br/>
 Car Parking Services Team<br/>
 Barts Health NHS Trust
@@ -637,11 +637,11 @@ Barts Health NHS Trust
 
 We have received your parking concession request for vehicle ${vrm}.
 
-The start date on your application was set to ${validFrom}, which is outside the permitted advance booking period. To prevent issuing an invalid concession and reduce the risk of a Parking Charge Notice (PCN) being issued, this request has been cancelled.
+The start date on your application was set to ${validFrom}, which is outside the permitted advance booking period. To prevent an invalid concession from being issued and to reduce the risk of a Parking Charge Notice (PCN), this request has been cancelled.
 
 If you still require parking, please contact your ward or department to submit a new concession request with the correct start date.
 
-If you continue to experience any issues or have any further queries, please contact: ${NHS_SUPPORT_EMAIL}
+If you have any queries, please contact: ${NHS_SUPPORT_EMAIL}
 
 Kind regards,
 Car Parking Services Team
@@ -650,9 +650,9 @@ Barts Health NHS Trust`;
     htmlText = `<div style="font-family: Calibri, Arial, sans-serif; font-size: 11pt; color: #000000; line-height: 1.35;">
 Dear ${driverName},<br/><br/>
 We have received your parking concession request for vehicle <strong>${vrm}</strong>.<br/><br/>
-The start date on your application was set to ${validFrom}, which is outside the permitted advance booking period. To prevent issuing an invalid concession and reduce the risk of a Parking Charge Notice (PCN) being issued, this request has been cancelled.<br/><br/>
+The start date on your application was set to ${validFrom}, which is outside the permitted advance booking period. To prevent an invalid concession from being issued and to reduce the risk of a Parking Charge Notice (PCN), this request has been cancelled.<br/><br/>
 If you still require parking, please contact your ward or department to submit a new concession request with the correct start date.<br/><br/>
-If you continue to experience any issues or have any further queries, please contact: <a href="mailto:${NHS_SUPPORT_EMAIL}" style="color: #005EB8; text-decoration: underline;">${NHS_SUPPORT_EMAIL}</a><br/><br/>
+If you have any queries, please contact: <a href="mailto:${NHS_SUPPORT_EMAIL}" style="color: #005EB8; text-decoration: underline;">${NHS_SUPPORT_EMAIL}</a><br/><br/>
 Kind regards,<br/>
 Car Parking Services Team<br/>
 Barts Health NHS Trust
