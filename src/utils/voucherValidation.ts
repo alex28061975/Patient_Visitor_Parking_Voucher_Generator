@@ -1,4 +1,5 @@
 import type { ParsedVoucherData, CsvPermitRecord } from "./csvParser";
+import { checkIsRecordDispatched } from "./dispatchUtils";
 
 export function cleanVoucherCodeValue(val: any): string {
   if (val === undefined || val === null) return "-";
@@ -699,6 +700,215 @@ export function computeVoucherBatchExpiryBadge(params: {
     formattedDate,
     daysDiff: daysLeft
   };
+}
+
+/**
+ * High-performance helper to build a Set of all assigned voucher codes across database records,
+ * excluding the current record being edited.
+ */
+export function buildAssignedCodeSet(
+  database?: CsvPermitRecord[] | null,
+  currentRecord?: CsvPermitRecord | null,
+  dispatchedKeys?: Set<string> | string[] | null
+): Set<string> {
+  const set = new Set<string>();
+  if (!database || database.length === 0) return set;
+
+  const dispatchedSet = dispatchedKeys
+    ? (Array.isArray(dispatchedKeys) ? new Set(dispatchedKeys) : dispatchedKeys)
+    : new Set<string>();
+
+  const codeFields = [
+    "voucherCode", "prePaidCode", "qrCode", "voucherCodesText", "serialNumber",
+    "voucher", "code", "qrOverride", "replacementCode", "originalVoucherCode",
+    "Voucher Code", "VOUCHER CODE", "Pre-Paid Code", "Pre Paid Code", "QR Code", "QR CODE"
+  ];
+
+  database.forEach(r => {
+    if (!r) return;
+    const isCancelledRecord = Boolean(
+      r.isCancelled === true ||
+      (typeof r.status === "string" && r.status.toUpperCase() === "CANCELLED") ||
+      r.voucherCode === "CANCELLED"
+    );
+
+    if (isCancelledRecord) {
+      const wasDispatched = checkIsRecordDispatched(r, r.vrm, r.driverName, r.dateRequired, dispatchedSet) ||
+        r.isDispatched === true ||
+        (r.status && (r.status.toUpperCase() === "SENT" || r.status.toUpperCase() === "DISPATCHED"));
+      if (!wasDispatched) {
+        return;
+      }
+    }
+
+    if (currentRecord) {
+      const id1 = String(r.id ?? "").trim();
+      const formId1 = String(r.formId ?? "").trim();
+      const id2 = String(currentRecord.id ?? "").trim();
+      const formId2 = String(currentRecord.formId ?? "").trim();
+      if (id1 || formId1 || id2 || formId2) {
+        if (
+          (id1 && id2 && id1 === id2) ||
+          (formId1 && formId2 && formId1 === formId2) ||
+          (id1 && formId2 && id1 === formId2) ||
+          (formId1 && id2 && formId1 === id2)
+        ) {
+          return;
+        }
+      } else {
+        const vrm1 = (r.vrm || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        const vrm2 = (currentRecord.vrm || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        if (vrm1 && vrm2 && vrm1 === vrm2) {
+          const d1 = normalizeDateToISO(r.validFrom || r.dateRequired) || "";
+          const d2 = normalizeDateToISO(currentRecord.validFrom || currentRecord.dateRequired) || "";
+          if (d1 && d2 && d1 === d2) return;
+        }
+      }
+    }
+
+    codeFields.forEach(field => {
+      const raw = (r as any)[field];
+      if (raw !== undefined && raw !== null) {
+        String(raw)
+          .split(/[\n,;\s]+/)
+          .forEach(part => {
+            const clean = cleanVoucherCodeValue(part).toUpperCase();
+            if (
+              clean &&
+              clean !== "-" &&
+              clean !== "CANCELLED" &&
+              clean !== "PENDING" &&
+              clean !== "BLOCKED" &&
+              clean !== "N/A" &&
+              clean !== "EXPIRED"
+            ) {
+              set.add(clean);
+            }
+          });
+      }
+    });
+  });
+
+  return set;
+}
+
+export interface GetSelectableActiveDateCodesParams {
+  vouchersDatabase?: ParsedVoucherData[] | null;
+  database?: CsvPermitRecord[] | null;
+  permitDateRequired: string;
+  permitDateExpiry?: string | null;
+  currentRecord?: CsvPermitRecord | null;
+  extraExcludedCodes?: string[] | Set<string> | null;
+  precomputedAssignedSet?: Set<string> | null;
+  dispatchedKeys?: Set<string> | string[] | null;
+}
+
+/**
+ * Shared canonical function to get all pickable active date codes for dropdowns.
+ * Enforces date range validity, not used/dispatched, not special, and not already assigned.
+ */
+export function getSelectableActiveDateCodes(
+  params: GetSelectableActiveDateCodesParams
+): ParsedVoucherData[] {
+  const {
+    vouchersDatabase,
+    database,
+    permitDateRequired,
+    permitDateExpiry,
+    currentRecord,
+    extraExcludedCodes,
+    precomputedAssignedSet,
+    dispatchedKeys
+  } = params;
+
+  if (!vouchersDatabase || vouchersDatabase.length === 0 || !permitDateRequired) {
+    return [];
+  }
+
+  const assignedSet = precomputedAssignedSet || buildAssignedCodeSet(database, currentRecord, dispatchedKeys);
+
+  const extraSet = new Set<string>();
+  if (extraExcludedCodes) {
+    if (extraExcludedCodes instanceof Set) {
+      extraExcludedCodes.forEach(c => {
+        const clean = cleanVoucherCodeValue(c).toUpperCase();
+        if (clean && clean !== "-") extraSet.add(clean);
+      });
+    } else if (Array.isArray(extraExcludedCodes)) {
+      extraExcludedCodes.forEach(c => {
+        const clean = cleanVoucherCodeValue(c).toUpperCase();
+        if (clean && clean !== "-") extraSet.add(clean);
+      });
+    }
+  }
+
+  const allocatedForCurrent = new Set<string>();
+  if (currentRecord && vouchersDatabase.length > 0) {
+    const recordVrmClean = (currentRecord.vrm || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const fromIso = normalizeDateToISO(currentRecord.dateRequired || currentRecord.validFrom || "") || "";
+    const toIso = currentRecord.validTo
+      ? (normalizeDateToISO(currentRecord.validTo) || "")
+      : (currentRecord.dateExpiry
+        ? (normalizeDateToISO(currentRecord.dateExpiry) || "")
+        : (fromIso ? addDaysISO(fromIso, 6) : ""));
+
+    if (recordVrmClean && fromIso) {
+      vouchersDatabase.forEach(v => {
+        if (!v || !v.code) return;
+        const vVrmClean = (v.vrm || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        if (!vVrmClean || vVrmClean !== recordVrmClean) return;
+        if (!isVoucherForPermitDateRange(v, fromIso, toIso)) return;
+        const clean = cleanVoucherCodeValue(v.code).toUpperCase();
+        if (clean && clean !== "-") allocatedForCurrent.add(clean);
+      });
+    }
+  }
+
+  return vouchersDatabase.filter(v => {
+    if (!v || !v.code) return false;
+
+    // a. Date check
+    if (!isVoucherForPermitDateRange(v, permitDateRequired, permitDateExpiry || permitDateRequired)) {
+      return false;
+    }
+
+    // b. Not used check
+    if (v.isUsed === true) return false;
+    const status = String(v.status || "").toLowerCase().trim();
+    if (
+      status === "used" ||
+      status === "dispatched" ||
+      status === "assigned" ||
+      status === "sent" ||
+      status === "completed" ||
+      status === "cancelled" ||
+      status === "canceled" ||
+      status === "expired"
+    ) {
+      return false;
+    }
+
+    // c. Not special check
+    const codeUpper = cleanVoucherCodeValue(v.code).toUpperCase();
+    if (
+      !codeUpper ||
+      codeUpper === "-" ||
+      codeUpper === "CANCELLED" ||
+      codeUpper === "PENDING" ||
+      codeUpper === "BLOCKED" ||
+      codeUpper === "EXPIRED" ||
+      codeUpper === "N/A"
+    ) {
+      return false;
+    }
+
+    // d. Not already assigned check
+    if (assignedSet.has(codeUpper)) return false;
+    if (extraSet.has(codeUpper)) return false;
+    if (allocatedForCurrent.has(codeUpper)) return false;
+
+    return true;
+  });
 }
 
 export {

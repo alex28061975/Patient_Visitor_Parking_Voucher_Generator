@@ -3400,6 +3400,7 @@ export default function App() {
         resolvedVoucherCode={editingResolvedVoucherCode}
         database={enrichedDatabase}
         vouchersDatabase={vouchersDatabase}
+        dispatchedKeys={dispatchedKeys}
         onClose={() => {
           setIsEditModalOpen(false);
           setEditingRecord(null);

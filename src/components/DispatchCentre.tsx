@@ -69,11 +69,13 @@ import {
   getVoucherValidToISO,
   normalizeDateToISO,
   addDaysISO,
-  computeVoucherBatchExpiryBadge
+  computeVoucherBatchExpiryBadge,
+  getSelectableActiveDateCodes,
+  buildAssignedCodeSet
 } from "../utils/voucherValidation";
 
-// ⭐ FIX: Re-export isVoucherForPermitDateRange so other files importing from DispatchCentre don't break
-export { isVoucherForPermitDateRange };
+// ⭐ FIX: Re-export helper functions so other files importing from DispatchCentre don't break
+export { isVoucherForPermitDateRange, getSelectableActiveDateCodes };
 
 interface DispatchCentreProps {
   database: CsvPermitRecord[];
@@ -222,6 +224,7 @@ function DispatchCentreComponent({
   const searchQuery = debouncedSearchQuery;
 
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [assignmentError, setAssignmentError] = useState<string | null>(null);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [wardDropdownOpen, setWardDropdownOpen] = useState(false);
   const [selectedRowRecord, setSelectedRowRecord] = useState<CsvPermitRecord | null>(null);
@@ -703,40 +706,27 @@ function DispatchCentreComponent({
     return isVoucherForPermitDateRange(v, currentPermitValidFromIso, currentPermitValidToIso);
   }, [currentPermitValidFromIso, currentPermitValidToIso]);
 
-  // Unused vouchers computation for the active date with exact validFrom/validTo matching
-  // Excludes codes that have already been dispatched or assigned - showing only UNSENT codes
+  // Unused vouchers computation for the active date using getSelectableActiveDateCodes
   const unusedVouchersForDay = useMemo<ParsedVoucherData[]>(() => {
     if (!currentPermitValidFromIso || !vouchersDatabase || vouchersDatabase.length === 0) {
       return [];
     }
-
     const validTo = currentPermitValidToIso || currentPermitValidFromIso;
-
-    // Filter vouchers that strictly match the current selected permit's date range (ValidFrom - ValidTo)
-    const matchingRangeVouchers = voucherIndex.getVouchersForDateRange(currentPermitValidFromIso, validTo);
-
-    return matchingRangeVouchers.filter(v => {
-      // ❌ Exclude used/dispatched codes
-      if (v.isUsed === true || v.status === "used" || v.status === "dispatched") {
-        return false;
-      }
-      const codeUpper = cleanVoucherCodeValue(v.code).toUpperCase();
-      if (!codeUpper || codeUpper === "-" || codeUpper === "CANCELLED" || codeUpper === "PENDING") {
-        return false;
-      }
-      // ⭐ Exclude codes that have already been assigned/sent
-      // Only show UNSENT codes
-      if (assignedVoucherCodesSet.has(codeUpper)) {
-        return false;
-      }
-      return true;
+    return getSelectableActiveDateCodes({
+      vouchersDatabase,
+      database,
+      permitDateRequired: currentPermitValidFromIso,
+      permitDateExpiry: validTo,
+      currentRecord: selectedRowRecord || activeRecord,
+      extraExcludedCodes: activeRecord ? [activeRecord.voucherCode, activeRecord.prePaidCode, activeRecord.voucherCodesText, activeRecord.replacementCode] : []
     });
   }, [
-    voucherIndex,
     vouchersDatabase,
+    database,
     currentPermitValidFromIso,
     currentPermitValidToIso,
-    assignedVoucherCodesSet
+    selectedRowRecord,
+    activeRecord
   ]);
 
   // Exact range voucher stock metrics for Active Date Codes dropdown badge
@@ -761,51 +751,15 @@ function DispatchCentreComponent({
       return;
     }
 
-    const codeFields = [
-      "replacementCode",
-      "originalVoucherCode",
-      "voucherCode",
-      "prePaidCode",
-      "qrCode",
-      "voucherCodesText",
-      "serialNumber",
-      "voucher",
-      "code",
-      "qrOverride",
-      "Voucher Code",
-      "VOUCHER CODE",
-      "Pre-Paid Code",
-      "Pre Paid Code",
-      "QR Code",
-      "QR CODE"
-    ];
+    const currentRec = activeRecord || selectedRowRecord;
+    const assignedSet = buildAssignedCodeSet(database, currentRec);
 
-    const isCodeAssigned = (record: any) => {
-      if (!record) return false;
-
-      return codeFields.some((field) => {
-        const raw = record[field];
-        if (raw === undefined || raw === null) return false;
-
-        return String(raw)
-          .split(/[\n,;\s]+/)
-          .map((part) => cleanVoucherCodeValue(part).toUpperCase())
-          .some((code) => code && code !== "-" && isVoucherCodeMatch(code, selectedCode));
-      });
-    };
-
-    const currentRec = activeRecord;
-    const alreadyAssigned = (database || []).some(r => {
-      if (currentRec && isRecordMatch(r, currentRec)) return false;
-      return isCodeAssigned(r);
-    });
-
-    if (alreadyAssigned) {
-      console.warn(
-        `🚫 Voucher ${selectedCode} is already assigned and cannot be reused.`
-      );
+    if (assignedSet.has(selectedCode)) {
+      setAssignmentError(`${selectedCode} is no longer available`);
+      setTimeout(() => setAssignmentError(null), 4000);
       return;
     }
+    setAssignmentError(null);
 
     const originalVoucherCode = currentRec?.originalVoucherCode || currentRec?.voucherCode || currentRec?.prePaidCode;
 
@@ -1692,49 +1646,56 @@ function DispatchCentreComponent({
           </div>
 
           {/* Right: Active Date Codes & Validity Badge on a single line */}
-          <div className="flex flex-row items-center gap-2 whitespace-nowrap shrink-0 ml-auto lg:ml-0">
-            <label 
-              className={`text-xs sm:text-sm font-medium whitespace-nowrap shrink-0 ${
-                isRangeStockLow ? "text-[#b91c1c]" : "text-[#15803d]"
-              }`}
-            >
-              Active Date Codes ({unusedVouchersForDay.length}):
-            </label>
-            <select
-              value={unusedVouchersForDay.some(v => cleanVoucherCodeValue(v.code).toUpperCase() === cleanVoucherCodeValue(formData?.voucherCodesText).toUpperCase()) ? cleanVoucherCodeValue(formData?.voucherCodesText).toUpperCase() : ""}
-              onChange={handleActiveDateCodeChange}
-              disabled={unusedVouchersForDay.length === 0}
-              className={`h-8 px-2.5 py-1 border rounded-lg text-xs font-mono font-bold focus:outline-none transition shrink-0 ${
-                isRangeStockLow
-                  ? "bg-[#fee2e2] text-[#b91c1c] border-[#dc2626] cursor-pointer"
-                  : "bg-[#dcfce7] text-[#15803d] border-[#16a34a] cursor-pointer"
-              }`}
-            >
-              <option value="" disabled className="font-mono font-normal text-slate-700 bg-white">
-                {vouchersDatabase.length === 0
-                  ? "-- No Vouchers Uploaded --"
-                  : unusedVouchersForDay.length === 0
-                    ? "-- 0 Available --"
-                    : "-- Choose Code --"}
-              </option>
-              {unusedVouchersForDay.map((v, index) => {
-                const cleanCode = cleanVoucherCodeValue(v.code).toUpperCase();
-                return (
-                  <option
-                    key={`voucher_${cleanCode}_${index}`}
-                    value={cleanCode}
-                    className="font-mono text-gray-900 bg-white"
-                  >
-                    {cleanCode}
-                  </option>
-                );
-              })}
-            </select>
-            {voucherBatchBadge && (
-              <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 shadow-sm ${voucherBatchBadge.className}`}>
-                <span className="text-[11px] leading-none select-none">{voucherBatchBadge.icon}</span>{' '}
-                <span>{voucherBatchBadge.text}</span>
-              </span>
+          <div className="flex flex-col gap-1 items-end sm:items-start whitespace-nowrap shrink-0 ml-auto lg:ml-0">
+            <div className="flex flex-row items-center gap-2">
+              <label 
+                className={`text-xs sm:text-sm font-medium whitespace-nowrap shrink-0 ${
+                  isRangeStockLow ? "text-[#b91c1c]" : "text-[#15803d]"
+                }`}
+              >
+                Active Date Codes ({unusedVouchersForDay.length}):
+              </label>
+              <select
+                value={unusedVouchersForDay.some(v => cleanVoucherCodeValue(v.code).toUpperCase() === cleanVoucherCodeValue(formData?.voucherCodesText).toUpperCase()) ? cleanVoucherCodeValue(formData?.voucherCodesText).toUpperCase() : ""}
+                onChange={handleActiveDateCodeChange}
+                disabled={unusedVouchersForDay.length === 0}
+                className={`h-8 px-2.5 py-1 border rounded-lg text-xs font-mono font-bold focus:outline-none transition shrink-0 ${
+                  isRangeStockLow
+                    ? "bg-[#fee2e2] text-[#b91c1c] border-[#dc2626] cursor-pointer"
+                    : "bg-[#dcfce7] text-[#15803d] border-[#16a34a] cursor-pointer"
+                }`}
+              >
+                <option value="" disabled className="font-mono font-normal text-slate-700 bg-white">
+                  {vouchersDatabase.length === 0
+                    ? "-- No Vouchers Uploaded --"
+                    : unusedVouchersForDay.length === 0
+                      ? "-- 0 Available --"
+                      : "-- Choose Code --"}
+                </option>
+                {unusedVouchersForDay.map((v, index) => {
+                  const cleanCode = cleanVoucherCodeValue(v.code).toUpperCase();
+                  return (
+                    <option
+                      key={`voucher_${cleanCode}_${index}`}
+                      value={cleanCode}
+                      className="font-mono text-gray-900 bg-white"
+                    >
+                      {cleanCode}
+                    </option>
+                  );
+                })}
+              </select>
+              {voucherBatchBadge && (
+                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 shadow-sm ${voucherBatchBadge.className}`}>
+                  <span className="text-[11px] leading-none select-none">{voucherBatchBadge.icon}</span>{' '}
+                  <span>{voucherBatchBadge.text}</span>
+                </span>
+              )}
+            </div>
+            {assignmentError && (
+              <div className="text-xs text-rose-600 dark:text-rose-400 font-medium">
+                {assignmentError}
+              </div>
             )}
           </div>
         </div>

@@ -34,6 +34,7 @@ import {
   ChevronDown
 } from "lucide-react";
 import { isVrmSilentBlockedSync } from "../lib/blocklist";
+import { getSelectableActiveDateCodes, buildAssignedCodeSet } from "../utils/voucherValidation";
 
 // Helper to format string to Title Case (capitalize each word)
 function toTitleCase(str: string): string {
@@ -72,6 +73,8 @@ export function PermitForm({
   dispatchBy = {},
   onChange
 }: PermitFormProps) {
+  const [assignmentError, setAssignmentError] = useState<string | null>(null);
+
   // Distinct wards for the dropdown
   const availableWards = useMemo(() => {
     const set = new Set<string>();
@@ -105,41 +108,6 @@ export function PermitForm({
     return getMatchingPermits(database, targetIso);
   }, [database, targetIso]);
 
-  // Unused vouchers computation
-  const unusedVouchersForDay = useMemo<ParsedVoucherData[]>(() => {
-    if (!targetIso) return [];
-
-    const vouchers = getUnusedVouchersForDate(
-      vouchersDatabase,
-      database,
-      targetIso,
-      data.vrm,
-      data,
-      matchingPermits
-    );
-
-    // Filter to vouchers matching targetIso validity period
-    const dateFiltered = vouchers.filter(v => isVoucherInValidityPeriod(v, targetIso));
-
-    const spreadsheetAssignedCodes = getSpreadsheetMatchingAssignedCodes(
-      matchingPermits,
-      database,
-      targetIso,
-      vouchersDatabase
-    );
-    const finalFiltered = dateFiltered.filter(v => {
-      const codeUpper = (v.code || "").trim().toUpperCase();
-      return !spreadsheetAssignedCodes.has(codeUpper);
-    });
-
-    // Total vouchers for the selected target date (strict validity period, no fallback)
-    const dailyVouchers = (vouchersDatabase || []).filter(v => isVoucherInValidityPeriod(v, targetIso));
-    const totalForDate = dailyVouchers.length;
-    const assignedCount = Math.max(0, totalForDate - finalFiltered.length);
-
-    return finalFiltered;
-  }, [vouchersDatabase, database, matchingPermits, targetIso, data]);
-
   // The form only ever holds ONE mutable, shared editable state (`data`), which can
   // carry stale fields (e.g. dateRequired) left over from a previously-loaded record.
   // The Permit Table never has this problem because it reads each row's own record
@@ -154,6 +122,26 @@ export function PermitForm({
     );
     return matched || data;
   }, [data, database]);
+
+  // Precomputed assigned set for performance (keyed on database, dispatchedKeys, and canonicalRecord id)
+  const assignedSetForPermit = useMemo(() => {
+    return buildAssignedCodeSet(database, canonicalRecord, dispatchedKeys);
+  }, [database, canonicalRecord, dispatchedKeys]);
+
+  // Unused vouchers computation using shared getSelectableActiveDateCodes and precomputedAssignedSet
+  const unusedVouchersForDay = useMemo<ParsedVoucherData[]>(() => {
+    if (!targetIso) return [];
+    return getSelectableActiveDateCodes({
+      vouchersDatabase,
+      database,
+      permitDateRequired: targetIso,
+      permitDateExpiry: data.validTo || addDays(targetIso, 6),
+      currentRecord: canonicalRecord,
+      extraExcludedCodes: [data.voucherCodesText, data.voucherCode, data.prePaidCode],
+      precomputedAssignedSet: assignedSetForPermit,
+      dispatchedKeys
+    });
+  }, [vouchersDatabase, database, targetIso, data, canonicalRecord, assignedSetForPermit, dispatchedKeys]);
 
   const hasValidVoucherCode = useMemo(() => {
     const code = cleanVoucherCodeValue(String(data.voucherCodesText || "")).toUpperCase();
@@ -454,103 +442,68 @@ export function PermitForm({
 
         {/* Right Half (50% Width): Label + Dropdown Select */}
         {vouchersDatabase && vouchersDatabase.length > 0 ? (
-          <div className="flex items-center gap-2 w-full">
-            <label className="text-sm font-medium text-slate-700 dark:text-slate-200 whitespace-nowrap shrink-0">
-              Active Date Codes ({unusedVouchersForDay.length}):
-            </label>
+          <div className="flex flex-col gap-1 w-full">
+            <div className="flex items-center gap-2 w-full">
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-200 whitespace-nowrap shrink-0">
+                Active Date Codes ({unusedVouchersForDay.length}):
+              </label>
 
-            <select
-              value={unusedVouchersForDay.some(v => v.code === data.voucherCodesText) ? data.voucherCodesText : ""}
-              onChange={(e) => {
-                const selectedCode = cleanVoucherCodeValue(e.target.value).toUpperCase();
-                if (!selectedCode || selectedCode === "-" || selectedCode === "CANCELLED") {
-                  return;
-                }
+              <select
+                value={unusedVouchersForDay.some(v => v.code === data.voucherCodesText) ? data.voucherCodesText : ""}
+                onChange={(e) => {
+                  const selectedCode = cleanVoucherCodeValue(e.target.value).toUpperCase();
+                  if (!selectedCode || selectedCode === "-" || selectedCode === "CANCELLED") {
+                    return;
+                  }
 
-                // Final client-side race-condition guard. The dropdown is built
-                // from unusedVouchersForDay, but the database may have changed
-                // since that list was calculated. Never allow a code that is
-                // already present on ANY permit record to be assigned again.
-                const codeFields = [
-                  "replacementCode",
-                  "originalVoucherCode",
-                  "voucherCode",
-                  "prePaidCode",
-                  "qrCode",
-                  "voucherCodesText",
-                  "serialNumber",
-                  "voucher",
-                  "code",
-                  "qrOverride",
-                  "Voucher Code",
-                  "VOUCHER CODE",
-                  "Pre-Paid Code",
-                  "Pre Paid Code",
-                  "QR Code",
-                  "QR CODE"
-                ];
+                  if (assignedSetForPermit.has(selectedCode)) {
+                    setAssignmentError(`${selectedCode} is no longer available`);
+                    setTimeout(() => setAssignmentError(null), 4000);
+                    return;
+                  }
+                  setAssignmentError(null);
 
-                const isCodeAssigned = (record: any) => {
-                  if (!record) return false;
-
-                  return codeFields.some((field) => {
-                    const raw = record[field];
-                    if (raw === undefined || raw === null) return false;
-
-                    return String(raw)
-                      .split(/[\n,;\s]+/)
-                      .map((part) => cleanVoucherCodeValue(part).toUpperCase())
-                      .some((code) => code && code !== "-" && isVoucherCodeMatch(code, selectedCode));
+                  onChange({
+                    id: data.id,
+                    formId: data.formId,
+                    vrm: data.vrm,
+                    validFrom: data.validFrom,
+                    dateRequired: data.dateRequired,
+                    todayDate: data.todayDate,
+                    voucherCodesText: selectedCode,
+                    replacementCode: selectedCode,
+                    status: "Pending",
+                    emailType: "RESEND_CONCESSION",
+                    isResend: true,
+                    emailTemplate: "replacement"
                   });
-                };
-
-                // Include the complete database AND the currently edited record.
-                // Cancellation status/date is deliberately ignored.
-                const alreadyAssigned =
-                  (database || []).some(isCodeAssigned) || isCodeAssigned(data);
-
-                if (alreadyAssigned) {
-                  console.warn(
-                    `🚫 Voucher ${selectedCode} is already assigned and cannot be reused.`
-                  );
-                  return;
-                }
-
-                onChange({
-                  id: data.id,
-                  formId: data.formId,
-                  vrm: data.vrm,
-                  validFrom: data.validFrom,
-                  dateRequired: data.dateRequired,
-                  todayDate: data.todayDate,
-                  voucherCodesText: selectedCode,
-                  replacementCode: selectedCode,
-                  status: "Pending",
-                  emailType: "RESEND_CONCESSION",
-                  isResend: true,
-                  emailTemplate: "replacement"
-                });
-              }}
-              disabled={unusedVouchersForDay.length === 0}
-              className={`flex-1 min-w-[180px] w-full h-9 px-3 py-1.5 border rounded-md text-xs font-mono font-extrabold focus:outline-none transition-all ${
-                unusedVouchersForDay.length > 0
-                  ? "border-gray-300 dark:border-slate-700 focus:border-[#005EB8] dark:focus:border-blue-500 bg-emerald-50/80 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-200 cursor-pointer"
-                  : "border-gray-200 dark:border-slate-800 bg-gray-50 dark:bg-slate-900 text-gray-400 dark:text-slate-500 cursor-not-allowed font-normal"
-              }`}
-            >
-              <option value="" disabled className="font-mono font-normal">
-                -- Choose Code --
-              </option>
-              {unusedVouchersForDay.map((v, index) => (
-                <option
-                  key={`voucher_${v.code}_${index}`}
-                  value={v.code}
-                  className="font-mono font-extrabold text-gray-800 dark:bg-slate-900 dark:text-slate-100"
-                >
-                  {v.code}
+                }}
+                disabled={unusedVouchersForDay.length === 0}
+                className={`flex-1 min-w-[180px] w-full h-9 px-3 py-1.5 border rounded-md text-xs font-mono font-extrabold focus:outline-none transition-all ${
+                  unusedVouchersForDay.length > 0
+                    ? "border-gray-300 dark:border-slate-700 focus:border-[#005EB8] dark:focus:border-blue-500 bg-emerald-50/80 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-200 cursor-pointer"
+                    : "border-gray-200 dark:border-slate-800 bg-gray-50 dark:bg-slate-900 text-gray-400 dark:text-slate-500 cursor-not-allowed font-normal"
+                }`}
+              >
+                <option value="" disabled className="font-mono font-normal">
+                  -- Choose Code --
                 </option>
-              ))}
-            </select>
+                {unusedVouchersForDay.map((v, index) => (
+                  <option
+                    key={`voucher_${v.code}_${index}`}
+                    value={v.code}
+                    className="font-mono font-extrabold text-gray-800 dark:bg-slate-900 dark:text-slate-100"
+                  >
+                    {v.code}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {assignmentError && (
+              <div className="text-xs text-rose-600 dark:text-rose-400 font-medium">
+                {assignmentError}
+              </div>
+            )}
           </div>
         ) : null}
       </div>

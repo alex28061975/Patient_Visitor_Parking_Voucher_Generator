@@ -22,7 +22,7 @@ import {
   CancellationReason
 } from '../utils/emailTemplateUtils';
 import { getRecordPrimaryKey, getRecordKeys } from '../utils/dispatchUtils';
-import { computeVoucherBatchExpiryBadge, validateVoucherCSV, validateManualVoucherChange, isVoucherForPermitDateRange } from '../utils/voucherValidation';
+import { computeVoucherBatchExpiryBadge, validateVoucherCSV, validateManualVoucherChange, isVoucherForPermitDateRange, getSelectableActiveDateCodes, buildAssignedCodeSet, cleanVoucherCodeValue } from '../utils/voucherValidation';
 
 function makePermit(overrides: Partial<CsvPermitRecord> & { id: string; vrm: string }): CsvPermitRecord {
   return {
@@ -1557,5 +1557,163 @@ CON_ERR_2,,`;
     assert.ok(email.htmlText.includes('<span style="color: #C00000; font-weight: bold;">non-refundable</span>'));
   });
 
+  // =========================================================================
+  // TEST 29 — getSelectableActiveDateCodes shared selection logic & filtering
+  // =========================================================================
+  it('TEST 29: getSelectableActiveDateCodes correctly filters vouchers by date range, excludes used/dispatched codes, special statuses, and already-assigned codes', () => {
+    const vouchersDatabase: ParsedVoucherData[] = [
+      { code: 'VEND1', validFrom: '2026-10-10', validTo: '2026-10-16', status: 'available' },
+      { code: 'VEND2', validFrom: '2026-10-10', validTo: '2026-10-16', status: 'used' },
+      { code: 'VEND3', validFrom: '2026-10-17', validTo: '2026-10-23', status: 'available' }, // wrong date
+      { code: 'VEND4', validFrom: '2026-10-10', validTo: '2026-10-16', status: 'available' }, // already assigned in database
+      { code: 'VEND5', validFrom: '2026-10-10', validTo: '2026-10-16', status: 'available' }
+    ];
+
+    const database: CsvPermitRecord[] = [
+      makePermit({ id: '1', vrm: 'AB12CDE', dateRequired: '2026-10-10', voucherCode: 'VEND4', status: 'ACTIVE' })
+    ];
+
+    const selectable = getSelectableActiveDateCodes({
+      vouchersDatabase,
+      database,
+      permitDateRequired: '2026-10-10',
+      permitDateExpiry: '2026-10-16'
+    });
+
+    const codes = selectable.map(v => v.code);
+    assert.ok(codes.includes('VEND1'), 'VEND1 should be selectable');
+    assert.ok(codes.includes('VEND5'), 'VEND5 should be selectable');
+    assert.equal(codes.includes('VEND2'), false, 'Used voucher VEND2 should be excluded');
+    assert.equal(codes.includes('VEND3'), false, 'Wrong date voucher VEND3 should be excluded');
+    assert.equal(codes.includes('VEND4'), false, 'Already assigned voucher VEND4 should be excluded');
+  });
+
+  // =========================================================================
+  // TEST 30 — Cancelled records release codes, list and guard agree, current record own codes
+  // =========================================================================
+  it('TEST 30: cancelled records release codes, list and guard agree, current record own codes do not exclude themselves', () => {
+    const vouchersDatabase: ParsedVoucherData[] = [
+      { code: 'VENDCANCELLED', validFrom: '2026-10-10', validTo: '2026-10-16', status: 'available' },
+      { code: 'VENDACTIVE', validFrom: '2026-10-10', validTo: '2026-10-16', status: 'available' },
+      { code: 'VENDOWN', validFrom: '2026-10-10', validTo: '2026-10-16', status: 'available' }
+    ];
+
+    const currentRecord = makePermit({
+      id: '10',
+      vrm: 'XX99ZZZ',
+      dateRequired: '2026-10-10',
+      validFrom: '2026-10-10',
+      validTo: '2026-10-16',
+      voucherCodesText: 'VENDOWN'
+    });
+
+    const cancelledRecord = makePermit({
+      id: '1',
+      vrm: 'AB12CDE',
+      dateRequired: '2026-10-10',
+      status: 'CANCELLED',
+      isCancelled: true,
+      voucherCode: 'CANCELLED',
+      originalVoucherCode: 'VENDCANCELLED'
+    });
+
+    const activeRecord = makePermit({
+      id: '2',
+      vrm: 'CD34EFG',
+      dateRequired: '2026-10-10',
+      voucherCode: 'VENDACTIVE',
+      status: 'ACTIVE'
+    });
+
+    const database = [currentRecord, cancelledRecord, activeRecord];
+
+    const assignedSet = buildAssignedCodeSet(database, currentRecord);
+    assert.equal(assignedSet.has('VENDCANCELLED'), false, 'Cancelled record code should not be in assigned set');
+    assert.equal(assignedSet.has('VENDACTIVE'), true, 'Active record code should be in assigned set');
+    assert.equal(assignedSet.has('VENDOWN'), false, 'Current record own code should not be excluded by buildAssignedCodeSet when passed currentRecord');
+
+    const selectable = getSelectableActiveDateCodes({
+      vouchersDatabase,
+      database,
+      permitDateRequired: '2026-10-10',
+      permitDateExpiry: '2026-10-16',
+      currentRecord,
+      precomputedAssignedSet: assignedSet
+    });
+
+    const selectableCodes = selectable.map(v => v.code);
+    assert.ok(selectableCodes.includes('VENDCANCELLED'), 'VENDCANCELLED should be selectable');
+    assert.ok(selectableCodes.includes('VENDOWN'), 'VENDOWN should be selectable');
+    assert.equal(selectableCodes.includes('VENDACTIVE'), false, 'VENDACTIVE should not be selectable');
+
+    selectable.forEach(v => {
+      const code = cleanVoucherCodeValue(v.code).toUpperCase();
+      assert.equal(assignedSet.has(code), false, `List and guard agree for ${code}`);
+      const validation = validateManualVoucherChange({
+        origCode: 'VENDOWN',
+        newCode: code,
+        permitDateRequired: '2026-10-10',
+        permitDateExpiry: '2026-10-16',
+        vouchersDatabase,
+        assignedCodesInOtherRecords: assignedSet
+      });
+      assert.equal(validation.isValid, true, `Selectable code ${code} must pass validateManualVoucherChange`);
+    });
+  });
+
+  // =========================================================================
+  // TEST 31 — Cancelled permits: dispatched vs never-dispatched code rules
+  // =========================================================================
+  it('TEST 31: Cancelled permit never dispatched releases code; cancelled permit previously dispatched keeps code assigned', () => {
+    const vouchersDatabase: ParsedVoucherData[] = [
+      { code: 'VEND_NEVER_DISP', validFrom: '2026-10-10', validTo: '2026-10-16', status: 'available' },
+      { code: 'VEND_WAS_DISP', validFrom: '2026-10-10', validTo: '2026-10-16', status: 'available' }
+    ];
+
+    const neverDispatchedCancelledPermit = makePermit({
+      id: '101',
+      formId: '101',
+      vrm: 'NEVERDISP',
+      dateRequired: '2026-10-10',
+      status: 'CANCELLED',
+      isCancelled: true,
+      voucherCode: 'CANCELLED',
+      originalVoucherCode: 'VEND_NEVER_DISP'
+    });
+
+    const dispatchedCancelledPermit = makePermit({
+      id: '102',
+      formId: '102',
+      vrm: 'WASDISP',
+      dateRequired: '2026-10-10',
+      status: 'CANCELLED',
+      isCancelled: true,
+      voucherCode: 'CANCELLED',
+      originalVoucherCode: 'VEND_WAS_DISP'
+    });
+
+    const database = [neverDispatchedCancelledPermit, dispatchedCancelledPermit];
+    const dispatchedKeys = new Set<string>(['102']);
+
+    const assignedSet = buildAssignedCodeSet(database, null, dispatchedKeys);
+
+    assert.equal(assignedSet.has('VEND_NEVER_DISP'), false, 'Never dispatched cancelled permit releases its code');
+    assert.equal(assignedSet.has('VEND_WAS_DISP'), true, 'Dispatched cancelled permit keeps its code assigned');
+
+    const selectable = getSelectableActiveDateCodes({
+      vouchersDatabase,
+      database,
+      permitDateRequired: '2026-10-10',
+      permitDateExpiry: '2026-10-16',
+      dispatchedKeys,
+      precomputedAssignedSet: assignedSet
+    });
+
+    const codes = selectable.map(v => v.code);
+    assert.ok(codes.includes('VEND_NEVER_DISP'), 'Never dispatched code should be selectable');
+    assert.equal(codes.includes('VEND_WAS_DISP'), false, 'Dispatched code should remain unavailable');
+  });
+
 });
+
 
