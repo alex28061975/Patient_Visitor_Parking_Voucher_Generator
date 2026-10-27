@@ -2799,11 +2799,12 @@ export default function App() {
         mergedByKey.set(key, { ...item });
       } else if (existingCancelled && !incomingCancelled) {
         // If the existing copy is cancelled but the source Excel row is active:
-        // A genuinely cancelled record (MANUAL, BLOCKLIST, EXPIRED) must NEVER be automatically restored!
+        // A genuinely cancelled record (MANUAL, BLOCKLIST, EXPIRED, FUTURE) must NEVER be automatically restored!
         const isGenuinelyCancelled =
           existing.cancellationReason === "MANUAL" ||
           existing.cancellationReason === "BLOCKLIST" ||
           existing.cancellationReason === "EXPIRED" ||
+          existing.cancellationReason === "FUTURE" ||
           isVrmSilentBlockedSync(existing.vrm);
 
         if (isGenuinelyCancelled) {
