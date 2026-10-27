@@ -137,12 +137,12 @@ export function resolveCancellationDetails(
           const rFrom = parseDateToISO(r.validFrom || "");
           const rExp = parseDateToISO(r.dateExpiry || "");
           if (rReq) {
-            const calc = addDays(rReq, 6);
+            const calc = addDays(rReq, 7);
             rExpiry = (rTo && rTo > calc) ? rTo : calc;
           } else if (rTo) {
             rExpiry = rTo;
           } else if (rFrom) {
-            rExpiry = addDays(rFrom, 6);
+            rExpiry = addDays(rFrom, 7);
           } else if (rExp) {
             rExpiry = rExp;
           }
@@ -166,12 +166,12 @@ export function resolveCancellationDetails(
           const activeExpiryIso = parseDateToISO(activePermit.dateExpiry || "");
 
           if (activeReqIso) {
-            const calculatedExpiry = addDays(activeReqIso, 6);
+            const calculatedExpiry = addDays(activeReqIso, 7);
             expiryIso = (activeValidToIso && activeValidToIso > calculatedExpiry) ? activeValidToIso : calculatedExpiry;
           } else if (activeValidToIso) {
             expiryIso = activeValidToIso;
           } else if (activeValidFromIso) {
-            expiryIso = addDays(activeValidFromIso, 6);
+            expiryIso = addDays(activeValidFromIso, 7);
           } else if (activeExpiryIso) {
             expiryIso = activeExpiryIso;
           } else {

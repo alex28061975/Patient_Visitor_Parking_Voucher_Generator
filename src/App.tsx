@@ -68,9 +68,18 @@ function toTitleCase(str: string): string {
     .replace(/(?:^|\s|-)\S/g, (char) => char.toUpperCase());
 }
 
+let lastInputRef: CsvPermitRecord[] | null = null;
+let lastOutputRef: CsvPermitRecord[] | null = null;
+let lastSig = "";
+
 // ⭐ Auto-Cancel Duplicates - GROUP BY VRM ONLY, earliest submission timestamp wins
 export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecord[] => {
   if (!records || records.length === 0) return records;
+
+  const sig = `${records.length}_${records[0]?.id || records[0]?.formId}_${records[records.length - 1]?.id || records[records.length - 1]?.formId}_${records[0]?.status}_${records[records.length - 1]?.status}`;
+  if (records === lastInputRef && sig === lastSig && lastOutputRef) {
+    return lastOutputRef;
+  }
 
   const results: CsvPermitRecord[] = new Array(records.length);
   const vrmMap = new Map<string, { record: CsvPermitRecord; index: number }[]>();
@@ -268,13 +277,15 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
           ? duplicate.voucherCode
           : (duplicate.originalVoucherCode || "-");
 
-        console.log(`${vrm}`);
-        console.log(`WINNER: #${winner.formId ?? winner.id}`);
-        console.log(`submitted: ${winner.startTime || winner.completionTime || "-"}`);
-        console.log(`voucher: ${winnerVoucher}`);
-        console.log(`DUPLICATE: #${duplicate.formId ?? duplicate.id}`);
-        console.log(`submitted: ${duplicate.startTime || duplicate.completionTime || "-"}`);
-        console.log(`voucher: ${duplicateVoucher}`);
+        if (typeof window !== 'undefined' && safeLocalStorage.getItem("debug_duplicates") === "1") {
+          console.log(`${vrm}`);
+          console.log(`WINNER: #${winner.formId ?? winner.id}`);
+          console.log(`submitted: ${winner.startTime || winner.completionTime || "-"}`);
+          console.log(`voucher: ${winnerVoucher}`);
+          console.log(`DUPLICATE: #${duplicate.formId ?? duplicate.id}`);
+          console.log(`submitted: ${duplicate.startTime || duplicate.completionTime || "-"}`);
+          console.log(`voucher: ${duplicateVoucher}`);
+        }
 
         results[entry.index] = {
           ...entry.record,
@@ -325,6 +336,9 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
     }
   }
 
+  lastInputRef = records;
+  lastSig = sig;
+  lastOutputRef = results;
   return results;
 };
 

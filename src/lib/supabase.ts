@@ -59,11 +59,11 @@ export const initSupabaseConfig = async (): Promise<boolean> => {
         }
         supabaseClient = null;
       }
-    } else {
-      console.warn(`⚠️ /api/config returned ${res ? res.status : 'error'}. Using default environment/local storage mode.`);
+    } else if (res && res.status !== 404) {
+      console.warn(`⚠️ /api/config returned ${res.status}. Using default environment/local storage mode.`);
     }
   } catch (err) {
-    console.warn('⚠️ Note: /api/config not available, running in fallback/local mode:', err);
+    // Quiet fallback
   }
   return isSupabaseConfigured();
 };
