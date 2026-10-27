@@ -140,6 +140,7 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
   const isGenuinelyCancelled = (r: CsvPermitRecord): boolean => {
     if (r.cancellationReason === "MANUAL") return true;
     if (r.cancellationReason === "BLOCKLIST") return true;
+    if (r.cancellationReason === "FUTURE") return true;
     if (isVrmSilentBlockedSync(r.vrm) || String(r.status || "").trim().toUpperCase() === "BLOCKED") return true;
 
     const rawRefDate = r.todayDate || r.processingDate || r.submissionDate;
@@ -282,7 +283,7 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
           voucherCode: "CANCELLED",
           prePaidCode: "CANCELLED",
           originalVoucherCode: preservedVoucher || entry.record.originalVoucherCode,
-          cancellationReason: (entry.record.cancellationReason === "MANUAL" || entry.record.cancellationReason === "BLOCKLIST" || entry.record.cancellationReason === "EXPIRED")
+          cancellationReason: (entry.record.cancellationReason === "MANUAL" || entry.record.cancellationReason === "BLOCKLIST" || entry.record.cancellationReason === "EXPIRED" || entry.record.cancellationReason === "FUTURE")
             ? entry.record.cancellationReason
             : "DUPLICATE_VRM"
         };

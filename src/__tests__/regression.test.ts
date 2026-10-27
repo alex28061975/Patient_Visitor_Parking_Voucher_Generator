@@ -1714,6 +1714,90 @@ CON_ERR_2,,`;
     assert.equal(codes.includes('VEND_WAS_DISP'), false, 'Dispatched code should remain unavailable');
   });
 
+  // =========================================================================
+  // TEST 32 — MF12YCO regression: FUTURE-cancelled record (#2330) remains cancelled and does not block valid subsequent request (#2353)
+  // =========================================================================
+  it('TEST 32: MF12YCO regression - FUTURE cancelled record remains cancelled and does not block later valid concession', () => {
+    const r2232 = makePermit({
+      id: '2232',
+      formId: '2232',
+      startTime: '17/10/2026 10:00:00',
+      vrm: 'MF12YCO',
+      validFrom: '19/10/2026',
+      validTo: '25/10/2026',
+      dateRequired: '19/10/2026',
+      dateExpiry: '25/10/2026',
+      status: 'ACTIVE',
+      voucherCode: 'V_2232'
+    });
+
+    const r2307 = makePermit({
+      id: '2307',
+      formId: '2307',
+      startTime: '23/10/2026 10:00:00',
+      vrm: 'MF12YCO',
+      validFrom: '23/10/2026',
+      validTo: '29/10/2026',
+      dateRequired: '23/10/2026',
+      dateExpiry: '29/10/2026',
+      status: 'ACTIVE'
+    });
+
+    const r2327 = makePermit({
+      id: '2327',
+      formId: '2327',
+      startTime: '24/10/2026 10:00:00',
+      vrm: 'MF12YCO',
+      validFrom: '24/10/2026',
+      validTo: '30/10/2026',
+      dateRequired: '24/10/2026',
+      dateExpiry: '30/10/2026',
+      status: 'ACTIVE'
+    });
+
+    const r2330 = makePermit({
+      id: '2330',
+      formId: '2330',
+      startTime: '24/10/2026 10:00:00',
+      vrm: 'MF12YCO',
+      validFrom: '27/10/2026',
+      validTo: '02/11/2026',
+      dateRequired: '27/10/2026',
+      dateExpiry: '02/11/2026',
+      status: 'CANCELLED',
+      isCancelled: true,
+      cancellationReason: 'FUTURE'
+    });
+
+    const r2353 = makePermit({
+      id: '2353',
+      formId: '2353',
+      startTime: '26/10/2026 15:07:14',
+      vrm: 'MF12YCO',
+      validFrom: '26/10/2026',
+      validTo: '01/11/2026',
+      dateRequired: '26/10/2026',
+      dateExpiry: '01/11/2026',
+      status: 'ACTIVE'
+    });
+
+    const reconciled = autoCancelDuplicates([r2232, r2307, r2327, r2330, r2353]);
+
+    const findRec = (id: string) => reconciled.find(r => r.formId === id || r.id === id);
+
+    assert.equal(findRec('2232')?.status, 'ACTIVE', '#2232 must remain ACTIVE');
+    assert.equal(findRec('2307')?.status, 'CANCELLED', '#2307 must be CANCELLED');
+    assert.equal(findRec('2307')?.cancellationReason, 'DUPLICATE_VRM');
+    assert.equal(findRec('2327')?.status, 'CANCELLED', '#2327 must be CANCELLED');
+    assert.equal(findRec('2327')?.cancellationReason, 'DUPLICATE_VRM');
+    assert.equal(findRec('2330')?.status, 'CANCELLED', '#2330 must remain CANCELLED');
+    assert.equal(findRec('2330')?.cancellationReason, 'FUTURE', '#2330 cancellationReason must be FUTURE');
+    assert.equal(findRec('2353')?.status, 'ACTIVE', '#2353 must be ACTIVE (not blocked by #2330)');
+    assert.equal(findRec('2353')?.isCancelled, false);
+    assert.notEqual(findRec('2353')?.cancellationReason, 'DUPLICATE_VRM');
+  });
+
 });
+
 
 
