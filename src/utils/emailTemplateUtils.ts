@@ -165,13 +165,12 @@ export function resolveCancellationDetails(
           const activeValidFromIso = parseDateToISO(activePermit.validFrom || "");
           const activeExpiryIso = parseDateToISO(activePermit.dateExpiry || "");
 
-          if (activeReqIso) {
-            const calculatedExpiry = addDays(activeReqIso, 7);
-            expiryIso = (activeValidToIso && activeValidToIso > calculatedExpiry) ? activeValidToIso : calculatedExpiry;
-          } else if (activeValidToIso) {
+          if (activeValidToIso) {
             expiryIso = activeValidToIso;
           } else if (activeValidFromIso) {
-            expiryIso = addDays(activeValidFromIso, 7);
+            expiryIso = addDays(activeValidFromIso, 6);
+          } else if (activeReqIso) {
+            expiryIso = addDays(activeReqIso, 6);
           } else if (activeExpiryIso) {
             expiryIso = activeExpiryIso;
           } else {
