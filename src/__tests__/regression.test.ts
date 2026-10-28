@@ -189,7 +189,7 @@ describe('ParkPass Concessions Regression Test Suite', () => {
     const newPermit: CsvPermitRecord = {
       id: '1829',
       formId: '1829',
-      startTime: '21/09/2026 11:00:00',
+      startTime: '25/09/2026 11:00:00',
       vrm: 'BD22XYZ',
       validFrom: '27/09/2026',
       validTo: '03/10/2026',
@@ -627,7 +627,7 @@ Barts Health NHS Trust`;
     const permitB = makePermit({
       id: 'B',
       formId: 'B',
-      startTime: '20/09/2026 09:05:00',
+      startTime: '25/09/2026 09:05:00',
       vrm: 'BD07DAY',
       validFrom: '27/09/2026',
       validTo: '03/10/2026',
@@ -834,7 +834,7 @@ Barts Health NHS Trust`;
     const earlierSubmitted = makePermit({
       id: '100',
       formId: '100',
-      startTime: '20/09/2026 10:00:00',
+      startTime: '25/09/2026 10:00:00',
       vrm: 'WINNER1',
       validFrom: '25/09/2026',
       validTo: '01/10/2026',
@@ -845,7 +845,7 @@ Barts Health NHS Trust`;
     const laterSubmittedLowerId = makePermit({
       id: '99',
       formId: '99',
-      startTime: '20/09/2026 11:00:00',
+      startTime: '25/09/2026 11:00:00',
       vrm: 'WINNER1',
       validFrom: '25/09/2026',
       validTo: '01/10/2026',
@@ -1795,6 +1795,47 @@ CON_ERR_2,,`;
     assert.equal(findRec('2353')?.status, 'ACTIVE', '#2353 must be ACTIVE (not blocked by #2330)');
     assert.equal(findRec('2353')?.isCancelled, false);
     assert.notEqual(findRec('2353')?.cancellationReason, 'DUPLICATE_VRM');
+  });
+
+  it('TEST 33: #2330 with unpopulated cancellationReason (NULL in Supabase) submitted 24/10 for 27/10 remains FUTURE regardless of current date (24/10, 25/10, 26/10, 27/10) and does not block #2353', () => {
+    const dates = ['24/10/2026', '25/10/2026', '26/10/2026', '27/10/2026'];
+
+    for (const todayStr of dates) {
+      const r2330Unpopulated = makePermit({
+        id: '2330',
+        formId: '2330',
+        startTime: '24/10/2026 16:44:10',
+        todayDate: todayStr,
+        vrm: 'MF12YCO',
+        validFrom: '27/10/2026',
+        validTo: '02/11/2026',
+        dateRequired: '27/10/2026',
+        dateExpiry: '02/11/2026',
+        status: 'ACTIVE',
+        voucherCode: '-'
+      });
+
+      const r2353 = makePermit({
+        id: '2353',
+        formId: '2353',
+        startTime: '26/10/2026 15:07:14',
+        todayDate: todayStr,
+        vrm: 'MF12YCO',
+        validFrom: '26/10/2026',
+        validTo: '01/11/2026',
+        dateRequired: '26/10/2026',
+        dateExpiry: '01/11/2026',
+        status: 'ACTIVE'
+      });
+
+      const reconciled = autoCancelDuplicates([r2330Unpopulated, r2353]);
+      const findRec = (id: string) => reconciled.find(r => r.formId === id || r.id === id);
+
+      assert.equal(findRec('2330')?.status, 'CANCELLED', `#2330 must be CANCELLED on ${todayStr}`);
+      assert.equal(findRec('2330')?.cancellationReason, 'FUTURE', `#2330 cancellationReason must be FUTURE on ${todayStr}`);
+      assert.equal(findRec('2353')?.status, 'ACTIVE', `#2353 must be ACTIVE on ${todayStr}`);
+      assert.equal(findRec('2353')?.isCancelled, false);
+    }
   });
 
 });

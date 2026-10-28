@@ -1503,6 +1503,38 @@ export function getTodayISO(): string {
 
 export const MAX_DAYS_AHEAD = 2;
 
+export function isPermitFuture(record: any): boolean {
+  if (!record) return false;
+  const canonicalReason = String(record.cancellationReason || "").trim().toUpperCase();
+  if (canonicalReason === "FUTURE") return true;
+
+  const reqDateIso = parseDateToISO(record.dateRequired || record.validFrom || "");
+  if (!reqDateIso) return false;
+
+  const subMs = extractRecordSubmissionTimeMs(record);
+  let refMs: number | null = subMs > 0 ? subMs : null;
+
+  if (!refMs || refMs <= 0) {
+    const rawRef = record.todayDate || record.processingDate || record.submissionDate;
+    if (rawRef) {
+      const refIso = parseDateToISO(String(rawRef));
+      if (/^\d{4}-\d{2}-\d{2}$/.test(refIso)) {
+        const [ry, rm, rd] = refIso.split("-").map(Number);
+        refMs = new Date(ry, rm - 1, rd, 0, 0, 0, 0).getTime();
+      }
+    }
+  }
+
+  if (!refMs || refMs <= 0) return false;
+
+  const refDate = new Date(refMs);
+  const refStartOfDayMs = new Date(refDate.getFullYear(), refDate.getMonth(), refDate.getDate(), 0, 0, 0, 0).getTime();
+  const [py, pm, pd] = reqDateIso.split("-").map(Number);
+  const parkingStartOfDayMs = new Date(py, pm - 1, pd, 0, 0, 0, 0).getTime();
+  const aheadDays = Math.floor((parkingStartOfDayMs - refStartOfDayMs) / 86400000);
+  return aheadDays > MAX_DAYS_AHEAD;
+}
+
 export function isDateRequiredOutsideValidWindow(dateRequiredStr?: string, referenceDateStr?: string): boolean {
   if (!dateRequiredStr) return false;
   const iso = parseDateToISO(String(dateRequiredStr));
@@ -2441,7 +2473,7 @@ export function isVoucherExactPeriodEligible(
 
 export function isRecordCancelledCanonical(record: any, todayDateOrReference?: string, database?: CsvPermitRecord[]): boolean {
   if (!record) return false;
-  if (record.cancellationReason === "MANUAL" || record.cancellationReason === "BLOCKLIST") return true;
+  if (record.cancellationReason === "MANUAL" || record.cancellationReason === "BLOCKLIST" || record.cancellationReason === "FUTURE" || isPermitFuture(record)) return true;
   if (record.cancellationReason === "DUPLICATE_VRM") {
     if (database && database.length > 0) {
       const rawRefDate = todayDateOrReference || record.todayDate || record.processingDate;
@@ -3365,6 +3397,8 @@ export function checkIsBlockedDuplicate(
       earlier?.cancellationReason === "BLOCKLIST" ||
       earlier?.cancellationReason === "MANUAL" ||
       earlier?.cancellationReason === "EXPIRED" ||
+      earlier?.cancellationReason === "FUTURE" ||
+      isPermitFuture(earlier) ||
       Boolean(earlier?.cancellationReason);
 
     // Check if earlier record is genuinely invalid (cancelled, silent blocked on security blocklist, or expired date)

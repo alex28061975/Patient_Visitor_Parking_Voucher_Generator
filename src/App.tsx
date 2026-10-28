@@ -25,7 +25,7 @@ import {
 // CSV Database Imports
 import { INITIAL_DEMO_CSV } from "./data/defaultCsv";
 import { isVrmSilentBlockedSync } from "./lib/blocklist";
-import { CsvPermitRecord, parsePermitCsv, parseDateToISO, addDays, formatPhoneNumber, ParsedVoucherData, addDaysSafe, parseDateRange, getDatesInRange, cleanVoucherCodeValue, exportToExcel, isVoucherCodeMatch, sortRecordsByFormIdDesc, getMatchingPermits, isDateRequiredOutsideValidWindow, isPermitExpiredBackdate, getTodayISO, checkIsBlockedDuplicate, parseFullDateTimeMs, normalizeVouchersList, isRecordCancelled, getRequestedPermitDateISO, isVoucherExactPeriodEligible, isVoucherAvailableStatus, isVoucherVrmCompatible, clearDuplicateCheckCache, extractRecordSubmissionTimeMs, extractRecordNumericFormId } from "./utils/csvParser";
+import { CsvPermitRecord, parsePermitCsv, parseDateToISO, addDays, formatPhoneNumber, ParsedVoucherData, addDaysSafe, parseDateRange, getDatesInRange, cleanVoucherCodeValue, exportToExcel, isVoucherCodeMatch, sortRecordsByFormIdDesc, getMatchingPermits, isDateRequiredOutsideValidWindow, isPermitExpiredBackdate, getTodayISO, checkIsBlockedDuplicate, parseFullDateTimeMs, normalizeVouchersList, isRecordCancelled, getRequestedPermitDateISO, isVoucherExactPeriodEligible, isVoucherAvailableStatus, isVoucherVrmCompatible, clearDuplicateCheckCache, extractRecordSubmissionTimeMs, extractRecordNumericFormId, isPermitFuture } from "./utils/csvParser";
 // ⭐ FIX: Import canonical voucher validation helper
 import { isVoucherForPermitDateRange, validateManualVoucherChange, getVoucherValidFromISO, getVoucherValidToISO } from "./utils/voucherValidation";
 import { CsvDatabasePanel, type CsvDatabasePanelHandle } from "./components/CsvDatabasePanel";
@@ -103,6 +103,8 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
       return;
     }
 
+
+
     // Expired requests backdated by 7+ days or 7+ days past the applicable reference date must be cancelled
     const rawRefDate = record.todayDate || record.processingDate || record.submissionDate;
     const refDate = rawRefDate ? (parseDateToISO(String(rawRefDate)) || "") : "";
@@ -149,7 +151,7 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
   const isGenuinelyCancelled = (r: CsvPermitRecord): boolean => {
     if (r.cancellationReason === "MANUAL") return true;
     if (r.cancellationReason === "BLOCKLIST") return true;
-    if (r.cancellationReason === "FUTURE") return true;
+    if (r.cancellationReason === "FUTURE" || isPermitFuture(r)) return true;
     if (isVrmSilentBlockedSync(r.vrm) || String(r.status || "").trim().toUpperCase() === "BLOCKED") return true;
 
     const rawRefDate = r.todayDate || r.processingDate || r.submissionDate;
@@ -185,7 +187,7 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
           ...entry.record,
           isCancelled: true,
           status: "CANCELLED",
-          cancellationReason: entry.record.cancellationReason || (isPermitExpiredBackdate(entry.record) ? "EXPIRED" : "MANUAL"),
+          cancellationReason: entry.record.cancellationReason || (isPermitFuture(entry.record) ? "FUTURE" : (isPermitExpiredBackdate(entry.record) ? "EXPIRED" : "MANUAL")),
           voucherCode: "CANCELLED",
           prePaidCode: "CANCELLED",
           originalVoucherCode: preservedVoucher || entry.record.originalVoucherCode
@@ -308,7 +310,7 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
           ...entry.record,
           isCancelled: true,
           status: "CANCELLED",
-          cancellationReason: entry.record.cancellationReason || (isPermitExpiredBackdate(entry.record) ? "EXPIRED" : "MANUAL"),
+          cancellationReason: entry.record.cancellationReason || (isPermitFuture(entry.record) ? "FUTURE" : (isPermitExpiredBackdate(entry.record) ? "EXPIRED" : "MANUAL")),
           voucherCode: "CANCELLED",
           prePaidCode: "CANCELLED",
           originalVoucherCode: preservedVoucher || entry.record.originalVoucherCode
