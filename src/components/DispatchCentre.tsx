@@ -1670,7 +1670,7 @@ function DispatchCentreComponent({
                     ? "-- No Vouchers Uploaded --"
                     : unusedVouchersForDay.length === 0
                       ? "-- 0 Available --"
-                      : "-- Choose Code --"}
+                      : "Replacing..."}
                 </option>
                 {unusedVouchersForDay.map((v, index) => {
                   const cleanCode = cleanVoucherCodeValue(v.code).toUpperCase();

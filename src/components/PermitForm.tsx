@@ -486,7 +486,7 @@ export function PermitForm({
                 }`}
               >
                 <option value="" disabled className="font-mono font-normal">
-                  -- Choose Code --
+                  Replacing...
                 </option>
                 {unusedVouchersForDay.map((v, index) => (
                   <option

@@ -2589,6 +2589,9 @@ export default function App() {
   }, [handleSelectRecord]);
 
   const handleSaveRecord = useCallback(async (updatedRecord: CsvPermitRecord) => {
+    // ⭐ Browser yield point to ensure "Saving..." state renders instantly in UI before heavy duplicate checks and storage writes
+    await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+
     // Defense-in-depth: Validate changed voucher code using canonical Active Date Code rules
     if (editingRecord && updatedRecord.voucherCode) {
       const origCode = cleanVoucherCodeValue(

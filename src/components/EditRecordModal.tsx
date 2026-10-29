@@ -415,7 +415,7 @@ function EditRecordModalComponent({
   return (
     <div 
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-200"
-      onClick={onClose}
+      onClick={isSaving ? undefined : onClose}
       role="dialog"
       aria-modal="true"
       aria-labelledby="edit-permit-modal-title"
@@ -445,7 +445,8 @@ function EditRecordModalComponent({
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors"
+            disabled={isSaving}
+            className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors disabled:opacity-50"
             title="Close"
           >
             <X className="w-5 h-5" />
@@ -616,7 +617,7 @@ function EditRecordModalComponent({
                 className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#071728] text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
               >
                 <option value="">
-                  {activeDateCodes.length === 0 && !formReplacementCode ? "No active codes for this date" : "-- Choose Replacement Code --"}
+                  {activeDateCodes.length === 0 && !formReplacementCode ? "No active codes for this date" : "Replacing..."}
                 </option>
                 {formReplacementCode && !activeDateCodes.some(v => cleanVoucherCodeValue(v.code).toUpperCase() === formReplacementCode) && (
                   <option value={formReplacementCode}>
@@ -658,7 +659,8 @@ function EditRecordModalComponent({
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
+              disabled={isSaving}
+              className="px-4 py-2 text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors disabled:opacity-50"
             >
               Cancel
             </button>
