@@ -22,5 +22,9 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "exclude": [
+    "../query_mf12.ts",
+    "query_mf12.ts"
+  ]
 }
