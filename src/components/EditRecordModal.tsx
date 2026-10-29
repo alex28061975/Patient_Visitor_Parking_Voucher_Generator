@@ -50,6 +50,7 @@ function EditRecordModalComponent({
   const [formStatus, setFormStatus] = useState("PENDING");
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isReplacingCode, setIsReplacingCode] = useState(false);
 
   // Resolve any real code found directly on record itself,
   // ignoring placeholder/display values like "-" or "CANCELLED".
@@ -248,8 +249,10 @@ function EditRecordModalComponent({
       return;
     }
 
+    setIsReplacingCode(true);
     setFormReplacementCode(selectedCode);
     setFormStatus("PENDING");
+    setTimeout(() => setIsReplacingCode(false), 600);
   };
 
   // Populate form fields whenever `record` changes or modal opens
@@ -611,13 +614,13 @@ function EditRecordModalComponent({
                 Active Date Codes ({activeDateCodes.length})
               </label>
               <select
-                value={formReplacementCode}
+                value=""
                 onChange={handleActiveDateCodeChange}
-                disabled={activeDateCodes.length === 0 && !formReplacementCode}
+                disabled={(activeDateCodes.length === 0 && !formReplacementCode) || isReplacingCode}
                 className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#071728] text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
               >
                 <option value="">
-                  {activeDateCodes.length === 0 && !formReplacementCode ? "No active codes for this date" : "Replacing..."}
+                  {activeDateCodes.length === 0 && !formReplacementCode ? "No active codes for this date" : (isReplacingCode ? "Replacing..." : "-- Choose Code --")}
                 </option>
                 {formReplacementCode && !activeDateCodes.some(v => cleanVoucherCodeValue(v.code).toUpperCase() === formReplacementCode) && (
                   <option value={formReplacementCode}>

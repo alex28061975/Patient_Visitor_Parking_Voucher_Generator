@@ -74,6 +74,7 @@ export function PermitForm({
   onChange
 }: PermitFormProps) {
   const [assignmentError, setAssignmentError] = useState<string | null>(null);
+  const [isReplacingCode, setIsReplacingCode] = useState(false);
 
   // Distinct wards for the dropdown
   const availableWards = useMemo(() => {
@@ -449,7 +450,7 @@ export function PermitForm({
               </label>
 
               <select
-                value={unusedVouchersForDay.some(v => v.code === data.voucherCodesText) ? data.voucherCodesText : ""}
+                value=""
                 onChange={(e) => {
                   const selectedCode = cleanVoucherCodeValue(e.target.value).toUpperCase();
                   if (!selectedCode || selectedCode === "-" || selectedCode === "CANCELLED") {
@@ -462,6 +463,8 @@ export function PermitForm({
                     return;
                   }
                   setAssignmentError(null);
+
+                  setIsReplacingCode(true);
 
                   onChange({
                     id: data.id,
@@ -477,8 +480,12 @@ export function PermitForm({
                     isResend: true,
                     emailTemplate: "replacement"
                   });
+
+                  setTimeout(() => {
+                    setIsReplacingCode(false);
+                  }, 600);
                 }}
-                disabled={unusedVouchersForDay.length === 0}
+                disabled={unusedVouchersForDay.length === 0 || isReplacingCode}
                 className={`flex-1 min-w-[180px] w-full h-9 px-3 py-1.5 border rounded-md text-xs font-mono font-extrabold focus:outline-none transition-all ${
                   unusedVouchersForDay.length > 0
                     ? "border-gray-300 dark:border-slate-700 focus:border-[#005EB8] dark:focus:border-blue-500 bg-emerald-50/80 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-200 cursor-pointer"
@@ -486,7 +493,7 @@ export function PermitForm({
                 }`}
               >
                 <option value="" disabled className="font-mono font-normal">
-                  Replacing...
+                  {isReplacingCode ? "Replacing..." : "-- Choose Code --"}
                 </option>
                 {unusedVouchersForDay.map((v, index) => (
                   <option

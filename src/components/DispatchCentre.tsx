@@ -228,6 +228,7 @@ function DispatchCentreComponent({
   const [actionsOpen, setActionsOpen] = useState(false);
   const [wardDropdownOpen, setWardDropdownOpen] = useState(false);
   const [selectedRowRecord, setSelectedRowRecord] = useState<CsvPermitRecord | null>(null);
+  const [isReplacingCode, setIsReplacingCode] = useState(false);
 
   // Sync selectedRowRecord when replacement code is assigned or cleared
   useEffect(() => {
@@ -761,6 +762,8 @@ function DispatchCentreComponent({
     }
     setAssignmentError(null);
 
+    setIsReplacingCode(true);
+
     const originalVoucherCode = currentRec?.originalVoucherCode || currentRec?.voucherCode || currentRec?.prePaidCode;
 
     if (currentRec) {
@@ -786,6 +789,10 @@ function DispatchCentreComponent({
       isResend: true,
       emailTemplate: "replacement"
     });
+
+    setTimeout(() => {
+      setIsReplacingCode(false);
+    }, 600);
   };
 
   // Sorting state
@@ -1656,9 +1663,9 @@ function DispatchCentreComponent({
                 Active Date Codes ({unusedVouchersForDay.length}):
               </label>
               <select
-                value={unusedVouchersForDay.some(v => cleanVoucherCodeValue(v.code).toUpperCase() === cleanVoucherCodeValue(formData?.voucherCodesText).toUpperCase()) ? cleanVoucherCodeValue(formData?.voucherCodesText).toUpperCase() : ""}
+                value=""
                 onChange={handleActiveDateCodeChange}
-                disabled={unusedVouchersForDay.length === 0}
+                disabled={unusedVouchersForDay.length === 0 || isReplacingCode}
                 className={`h-8 px-2.5 py-1 border rounded-lg text-xs font-mono font-bold focus:outline-none transition shrink-0 ${
                   isRangeStockLow
                     ? "bg-[#fee2e2] text-[#b91c1c] border-[#dc2626] cursor-pointer"
@@ -1670,7 +1677,9 @@ function DispatchCentreComponent({
                     ? "-- No Vouchers Uploaded --"
                     : unusedVouchersForDay.length === 0
                       ? "-- 0 Available --"
-                      : "Replacing..."}
+                      : isReplacingCode
+                        ? "Replacing..."
+                        : "-- Choose Code --"}
                 </option>
                 {unusedVouchersForDay.map((v, index) => {
                   const cleanCode = cleanVoucherCodeValue(v.code).toUpperCase();
