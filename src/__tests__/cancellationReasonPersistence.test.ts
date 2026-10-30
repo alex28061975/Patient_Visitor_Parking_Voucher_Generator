@@ -86,7 +86,7 @@ describe('Cancellation Reason Persistence & Reinstatement Test Suite', () => {
   it('c) Both records active and overlapping: output[1] is CANCELLED with reason DUPLICATE_VRM', () => {
     const r2168 = makeBasePermit({
       id: '2168',
-      startTime: '12/10/2026 19:36:04',
+      startTime: '14/10/2026 10:00:00',
       vrm: 'LA17EPY',
       validFrom: '15/10/2026',
       validTo: '21/10/2026',

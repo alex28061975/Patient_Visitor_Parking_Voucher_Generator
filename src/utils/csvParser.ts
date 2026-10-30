@@ -1972,11 +1972,11 @@ export function normalizeVoucherData(item: any): ParsedVoucherData {
   const rawCode = item.code || item.VoucherCode || item.Code || item.voucher_code || item.voucherCodesText || item.qrCode || item.serialNumber || "";
   const cleanCode = cleanVoucherCodeValue(rawCode);
   
-  const startRaw = item.validFrom || item.valid_from || item.ValidFrom || item.date || item.dateRequired || item.uploadDate || item.IssueDate || item.created_at || item.startDate || item.start_date;
+  const startRaw = item.validFrom || item.valid_from || item.ValidFrom || item.startDate || item.start_date;
   const endRaw = item.validTo || item.valid_to || item.ValidTo || item.expires || item.expiryDate || item.endDate || item.end_date;
   
   const validFrom = cleanVoucherDate(startRaw) || undefined;
-  const validTo = cleanVoucherDate(endRaw) || (validFrom ? addDaysSafe(validFrom, 6) : undefined);
+  const validTo = cleanVoucherDate(endRaw) || undefined;
   
   return {
     ...item,
@@ -2166,39 +2166,22 @@ export function parseVoucherFile(arrayBuffer: ArrayBuffer, fileName?: string): P
             validTo = range.endISO;
           }
         } else {
-          validFrom = cleanVoucherDate(row[validFromIdx]);
-        }
-      }
-
-      if (!validFrom) {
-        for (let c = 0; c < row.length; c++) {
-          if (c === voucherIdx || c === vrmIdx) continue;
-          const cellVal = row[c];
-          if (cellVal !== undefined && cellVal !== null) {
-            const rawCellStr = String(cellVal || "").trim();
-            const range = parseDateRange(rawCellStr);
-            if (range && range.startISO) {
-              validFrom = range.startISO;
-              if (!validTo && range.endISO && range.endISO !== range.startISO) {
-                validTo = range.endISO;
-              }
-              break;
-            }
-            const parsedDate = cleanVoucherDate(cellVal);
-            if (parsedDate && /^\d{4}-\d{2}-\d{2}$/.test(parsedDate)) {
-              validFrom = parsedDate;
-              break;
-            }
-          }
+          validFrom = normalizeDateToISO(rawFromStr);
         }
       }
 
       if (validToIdx !== -1 && row[validToIdx] !== undefined) {
-        validTo = cleanVoucherDate(row[validToIdx]);
+        const rawToStr = String(row[validToIdx] || "").trim();
+        const range = parseDateRange(rawToStr);
+        if (range && range.endISO) {
+          validTo = range.endISO;
+        } else {
+          validTo = normalizeDateToISO(rawToStr);
+        }
       }
       
-      const effectiveValidFrom = validFrom || defaultDate || undefined;
-      const effectiveValidTo = validTo || (effectiveValidFrom ? addDaysSafe(effectiveValidFrom, 6) : undefined);
+      const effectiveValidFrom = validFrom ? normalizeDateToISO(validFrom) : undefined;
+      const effectiveValidTo = validTo ? normalizeDateToISO(validTo) : undefined;
       const effectiveUploadDate = defaultDate || getTodayISO();
 
       result.push({
@@ -2206,10 +2189,10 @@ export function parseVoucherFile(arrayBuffer: ArrayBuffer, fileName?: string): P
         code: upperCode,
         status: status || "active",
         isUsed: isUsed !== undefined ? isUsed : false,
-        validFrom: effectiveValidFrom,
-        validTo: effectiveValidTo,
-        valid_from: effectiveValidFrom,
-        valid_to: effectiveValidTo,
+        validFrom: effectiveValidFrom || undefined,
+        validTo: effectiveValidTo || undefined,
+        valid_from: effectiveValidFrom || undefined,
+        valid_to: effectiveValidTo || undefined,
         uploadDate: effectiveUploadDate
       });
     }

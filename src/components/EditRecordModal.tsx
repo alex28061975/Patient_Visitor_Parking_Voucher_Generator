@@ -341,11 +341,38 @@ function EditRecordModalComponent({
       ""
     ).trim().toUpperCase();
 
+    const origDateReq = record.dateRequired || record.validFrom || "";
+    const origDateExp = record.dateExpiry || record.validTo || "";
+    const datesChanged = Boolean(
+      parseDateToISO(origDateReq) !== parseDateToISO(formDateRequired) ||
+      parseDateToISO(origDateExp) !== parseDateToISO(formDateExpiry || (formDateRequired ? addDays(formDateRequired, 6) : ""))
+    );
+
+    let finalVoucher = cleanVoucher;
+    let finalReplacement = formReplacementCode;
+
+    if (datesChanged && finalVoucher !== "-" && finalVoucher !== "CANCELLED" && finalVoucher !== "BLOCKED") {
+      const matchingV = vouchersDatabase.find(v => v && cleanVoucherCodeValue(v.code).toUpperCase() === finalVoucher);
+      if (!matchingV || !isVoucherForPermitDateRange(matchingV, formDateRequired, formDateExpiry || addDays(formDateRequired, 6))) {
+        finalVoucher = "-";
+        finalReplacement = "";
+      }
+    }
+
+    if (datesChanged && finalReplacement && finalReplacement !== "-") {
+      const matchingRep = vouchersDatabase.find(v => v && cleanVoucherCodeValue(v.code).toUpperCase() === finalReplacement);
+      if (!matchingRep || !isVoucherForPermitDateRange(matchingRep, formDateRequired, formDateExpiry || addDays(formDateRequired, 6))) {
+        finalReplacement = "";
+      }
+    }
+
     const voucherValidation = validateManualVoucherChange({
       origCode,
-      newCode: cleanVoucher,
+      newCode: finalVoucher,
       permitDateRequired: formDateRequired,
       permitDateExpiry: formDateExpiry || (formDateRequired ? addDays(formDateRequired, 6) : ""),
+      origDateRequired: origDateReq,
+      origDateExpiry: origDateExp,
       vouchersDatabase,
       assignedCodesInOtherRecords
     });
@@ -355,13 +382,17 @@ function EditRecordModalComponent({
       return;
     }
 
-    if (hasReplacement && formReplacementCode) {
+    const finalHasReplacement = Boolean(finalReplacement && finalReplacement !== "-" && !isCancelledFinal);
+
+    if (finalHasReplacement && finalReplacement) {
       const origRep = cleanVoucherCodeValue(record.replacementCode || "").trim().toUpperCase();
       const repValidation = validateManualVoucherChange({
         origCode: origRep,
-        newCode: formReplacementCode,
+        newCode: finalReplacement,
         permitDateRequired: formDateRequired,
         permitDateExpiry: formDateExpiry || (formDateRequired ? addDays(formDateRequired, 6) : ""),
+        origDateRequired: origDateReq,
+        origDateExpiry: origDateExp,
         vouchersDatabase,
         assignedCodesInOtherRecords
       });
@@ -387,18 +418,18 @@ function EditRecordModalComponent({
       validFrom: formDateRequired,
       validTo: formDateExpiry || (formDateRequired ? addDays(formDateRequired, 6) : ""),
       dateExpiry: formDateExpiry || (formDateRequired ? addDays(formDateRequired, 6) : ""),
-      voucherCode: cleanVoucher,
-      prePaidCode: cleanVoucher,
-      voucherCodesText: cleanVoucher,
+      voucherCode: finalVoucher,
+      prePaidCode: finalVoucher,
+      voucherCodesText: finalVoucher,
       status: isCancelledFinal ? "CANCELLED" : formStatus,
       isCancelled: isCancelledFinal,
       cancellationReason: isCancelledFinal ? (record.cancellationReason || "MANUAL") : undefined,
       isDispatched: !isCancelledFinal && formStatus === "SENT",
       // Replacement fields
-      replacementCode: hasReplacement ? formReplacementCode : undefined,
-      emailType: hasReplacement ? "RESEND_CONCESSION" : (record.emailType === "RESEND_CONCESSION" ? "SEND_CONCESSION" : record.emailType),
-      isResend: hasReplacement ? true : false,
-      emailTemplate: hasReplacement ? "replacement" : (record.emailTemplate === "replacement" ? "new" : record.emailTemplate)
+      replacementCode: finalHasReplacement ? finalReplacement : undefined,
+      emailType: finalHasReplacement ? "RESEND_CONCESSION" : (record.emailType === "RESEND_CONCESSION" ? "SEND_CONCESSION" : record.emailType),
+      isResend: finalHasReplacement ? true : false,
+      emailTemplate: finalHasReplacement ? "replacement" : (record.emailTemplate === "replacement" ? "new" : record.emailTemplate)
     };
 
     setIsSaving(true);

@@ -44,25 +44,37 @@ export function cleanVoucherCodeValue(val: any): string {
  * Normalizes any date string (ISO YYYY-MM-DD or UK DD/MM/YYYY) into ISO YYYY-MM-DD.
  */
 export function normalizeDateToISO(dateStr: string | undefined | null): string {
-  if (!dateStr) return "";
+  if (dateStr === undefined || dateStr === null) return "";
   const s = String(dateStr).trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  if (!s || s === "-" || s === "undefined" || s === "null") return "";
 
-  // Check UK DD/MM/YYYY or DD-MM-YYYY
-  const ukMatch = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+  // 1. If string starts with YYYY-MM-DD (with or without time or Z)
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+    return s.substring(0, 10);
+  }
+
+  // 2. Excel serial numbers (30000 to 60000) in UTC
+  const num = Number(s);
+  if (!isNaN(num) && num >= 30000 && num <= 60000 && !s.includes("/") && !s.includes("-") && !s.includes(".")) {
+    const utcMs = (num - 25569) * 86400000;
+    const d = new Date(utcMs);
+    if (!isNaN(d.getTime())) {
+      const yyyy = d.getUTCFullYear();
+      const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+      const dd = String(d.getUTCDate()).padStart(2, "0");
+      return `${yyyy}-${mm}-${dd}`;
+    }
+  }
+
+  // 3. Support DD.MM.YYYY, DD-MM-YYYY, DD/MM/YYYY, and 2-digit years (DD/MM/YY -> 20YY)
+  const ukMatch = s.match(/^(\d{1,2})[/. -](\d{1,2})[/. -](\d{2,4})/);
   if (ukMatch) {
     const day = ukMatch[1].padStart(2, "0");
     const month = ukMatch[2].padStart(2, "0");
-    const year = ukMatch[3];
-    return `${year}-${month}-${day}`;
-  }
-
-  // Fallback to Date parsing
-  const d = new Date(s);
-  if (!isNaN(d.getTime())) {
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
+    let year = ukMatch[3];
+    if (year.length === 2) {
+      year = "20" + year;
+    }
     return `${year}-${month}-${day}`;
   }
 
@@ -83,7 +95,7 @@ export function addDaysISO(isoDate: string, days: number): string {
 }
 
 /**
- * Extracts normalized validFrom from a voucher object
+ * Extracts normalized validFrom from a voucher object without derivation.
  */
 export function getVoucherValidFromISO(v: ParsedVoucherData | undefined | null): string {
   if (!v) return "";
@@ -95,31 +107,16 @@ export function getVoucherValidFromISO(v: ParsedVoucherData | undefined | null):
               (v as any).startDate || 
               (v as any).start_date || 
               (v as any).StartDate ||
-              (v as any)["Start Date"] ||
-              (v as any).date;
+              (v as any)["Start Date"];
   if (raw) {
     const iso = normalizeDateToISO(String(raw));
     if (iso) return iso;
-  }
-  const toRaw = v.validTo || 
-                (v as any).valid_to || 
-                (v as any).ValidTo || 
-                (v as any).VALIDTO ||
-                (v as any)["Valid To"] ||
-                (v as any).expiry_date || 
-                (v as any).expiryDate ||
-                (v as any)["Expiry Date"];
-  if (toRaw) {
-    const toIso = normalizeDateToISO(String(toRaw));
-    if (toIso) {
-      return addDaysISO(toIso, -6);
-    }
   }
   return "";
 }
 
 /**
- * Extracts normalized validTo from a voucher object
+ * Extracts normalized validTo from a voucher object without derivation.
  */
 export function getVoucherValidToISO(v: ParsedVoucherData | undefined | null): string {
   if (!v) return "";
@@ -127,21 +124,17 @@ export function getVoucherValidToISO(v: ParsedVoucherData | undefined | null): s
               (v as any).valid_to || 
               (v as any).ValidTo || 
               (v as any).VALIDTO ||
+              (v as any)["Valid To"] ||
               (v as any).expiry_date || 
               (v as any).expiryDate || 
               (v as any).expires || 
               (v as any).dateExpiry || 
               (v as any)["Expiry Date"] || 
-              (v as any)["Valid To"] || 
               (v as any).endDate || 
               (v as any).end_date;
   if (raw) {
     const iso = normalizeDateToISO(String(raw));
     if (iso) return iso;
-  }
-  const fromIso = getVoucherValidFromISO(v);
-  if (fromIso) {
-    return addDaysISO(fromIso, 6);
   }
   return "";
 }
@@ -164,17 +157,10 @@ export function isVoucherForPermitDateRange(
   if (!normPermitFrom) return false;
 
   const vFrom = getVoucherValidFromISO(v);
-  if (vFrom && vFrom !== normPermitFrom) {
-    return false;
-  }
-
-  const normPermitTo = permitToISO ? normalizeDateToISO(permitToISO) : addDaysISO(normPermitFrom, 6);
   const vTo = getVoucherValidToISO(v);
-  if (vTo && normPermitTo && vTo !== normPermitTo) {
-    return false;
-  }
-
-  return true;
+  const to = permitToISO ? normalizeDateToISO(permitToISO) : addDaysISO(normPermitFrom, 6);
+  if (!vFrom || !vTo || !to) return false;
+  return vFrom === normPermitFrom && vTo === to;
 }
 
 /**
@@ -209,6 +195,8 @@ export function validateManualVoucherChange(params: {
   newCode?: string | null;
   permitDateRequired: string;
   permitDateExpiry?: string;
+  origDateRequired?: string;
+  origDateExpiry?: string;
   vouchersDatabase?: ParsedVoucherData[] | null;
   assignedCodesInOtherRecords?: Set<string>;
 }): ValidateManualVoucherResult {
@@ -217,6 +205,8 @@ export function validateManualVoucherChange(params: {
     newCode,
     permitDateRequired,
     permitDateExpiry,
+    origDateRequired,
+    origDateExpiry,
     vouchersDatabase,
     assignedCodesInOtherRecords
   } = params;
@@ -236,8 +226,16 @@ export function validateManualVoucherChange(params: {
     );
   };
 
-  // Step 1 — Detect changed code. Unchanged codes or special non-voucher statuses pass through.
-  if (!cleanNew || isSpecialStatus(cleanNew) || cleanNew === cleanOrig) {
+  const datesChanged = Boolean(
+    (origDateRequired && permitDateRequired && normalizeDateToISO(origDateRequired) !== normalizeDateToISO(permitDateRequired)) ||
+    (origDateExpiry && permitDateExpiry && normalizeDateToISO(origDateExpiry) !== normalizeDateToISO(permitDateExpiry))
+  );
+
+  // Step 1 — Detect changed code. Unchanged codes (when dates unchanged) or special non-voucher statuses pass through.
+  if ((!cleanNew || isSpecialStatus(cleanNew) || cleanNew === cleanOrig) && !datesChanged) {
+    return { isValid: true };
+  }
+  if (isSpecialStatus(cleanNew)) {
     return { isValid: true };
   }
 

@@ -22,7 +22,7 @@ import {
   CancellationReason
 } from '../utils/emailTemplateUtils';
 import { getRecordPrimaryKey, getRecordKeys } from '../utils/dispatchUtils';
-import { computeVoucherBatchExpiryBadge, validateVoucherCSV, validateManualVoucherChange, isVoucherForPermitDateRange, getSelectableActiveDateCodes, buildAssignedCodeSet, cleanVoucherCodeValue } from '../utils/voucherValidation';
+import { computeVoucherBatchExpiryBadge, validateVoucherCSV, validateManualVoucherChange, isVoucherForPermitDateRange, getSelectableActiveDateCodes, buildAssignedCodeSet, cleanVoucherCodeValue, normalizeDateToISO } from '../utils/voucherValidation';
 
 function makePermit(overrides: Partial<CsvPermitRecord> & { id: string; vrm: string }): CsvPermitRecord {
   return {
@@ -1841,6 +1841,48 @@ CON_ERR_2,,`;
       assert.equal(findRec('2353')?.status, 'ACTIVE', `#2353 must be ACTIVE on ${todayStr}`);
       assert.equal(findRec('2353')?.isCancelled, false);
     }
+  });
+
+  it('TEST 34: Strict voucher date matching rules (undated, incomplete dates, exact 7-day, 5-day duration, normalizeDateToISO)', () => {
+    // 1. normalizeDateToISO cases
+    assert.equal(normalizeDateToISO('14/09/26'), '2026-09-14');
+    assert.equal(normalizeDateToISO('14.09.2026'), '2026-09-14');
+    assert.equal(normalizeDateToISO('2026-09-13T23:00:00.000Z'), '2026-09-13');
+    assert.equal(normalizeDateToISO('46279'), '2026-09-14');
+    assert.equal(normalizeDateToISO('garbage'), '');
+
+    const permit = makePermit({
+      id: 'p1',
+      formId: 'p1',
+      vrm: 'AB12XYZ',
+      validFrom: '2026-09-14',
+      validTo: '2026-09-20',
+      dateRequired: '2026-09-14'
+    });
+
+    // Undated voucher
+    const undatedVoucher: ParsedVoucherData = { code: 'V1', status: 'active', isUsed: false };
+    assert.equal(isVoucherForPermitDateRange(undatedVoucher, '2026-09-14', '2026-09-20'), false);
+
+    // Voucher with only validFrom (no validTo)
+    const partialVoucher: ParsedVoucherData = { code: 'V2', validFrom: '2026-09-14', status: 'active', isUsed: false };
+    assert.equal(isVoucherForPermitDateRange(partialVoucher, '2026-09-14', '2026-09-20'), false);
+
+    // Exact 7-day match
+    const exactVoucher: ParsedVoucherData = { code: 'V3', validFrom: '2026-09-14', validTo: '2026-09-20', status: 'active', isUsed: false };
+    assert.equal(isVoucherForPermitDateRange(exactVoucher, '2026-09-14', '2026-09-20'), true);
+
+    // Next-week / previous-week vouchers are not eligible
+    const nextWeekVoucher: ParsedVoucherData = { code: 'V4', validFrom: '2026-09-21', validTo: '2026-09-27', status: 'active', isUsed: false };
+    assert.equal(isVoucherForPermitDateRange(nextWeekVoucher, '2026-09-14', '2026-09-20'), false);
+
+    // 5-day voucher (validTo = D+4)
+    const shortVoucher: ParsedVoucherData = { code: 'V5', validFrom: '2026-09-14', validTo: '2026-09-18', status: 'active', isUsed: false };
+    assert.equal(isVoucherForPermitDateRange(shortVoucher, '2026-09-14', '2026-09-20'), false);
+
+    // enrichRecordsWithVouchers does not assign any voucher when only wrong-week or undated vouchers exist
+    const enriched = enrichRecordsWithVouchers([permit], [undatedVoucher, nextWeekVoucher], {}, '2026-09-14');
+    assert.equal(enriched[0].voucherCode, '-');
   });
 
 });

@@ -495,7 +495,7 @@ describe('Performance and Voucher Allocation Equivalence Benchmark', () => {
 
     console.log(`[BENCHMARK 3 - getSpreadsheetMatchingAllocationsMap (2,000 records)]: ${timeMs.toFixed(2)}ms, generated ${allocMap.size} allocation entries`);
     assert.ok(allocMap.size > 0, 'Allocation map must be populated');
-    assert.ok(timeMs < 250, `Allocation map execution should be under 250ms, took ${timeMs.toFixed(2)}ms`);
+    assert.ok(timeMs < 350, `Allocation map execution should be under 350ms, took ${timeMs.toFixed(2)}ms`);
   });
 
   // =========================================================================

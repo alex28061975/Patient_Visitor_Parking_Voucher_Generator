@@ -27,7 +27,7 @@ import { INITIAL_DEMO_CSV } from "./data/defaultCsv";
 import { isVrmSilentBlockedSync } from "./lib/blocklist";
 import { CsvPermitRecord, parsePermitCsv, parseDateToISO, addDays, formatPhoneNumber, ParsedVoucherData, addDaysSafe, parseDateRange, getDatesInRange, cleanVoucherCodeValue, exportToExcel, isVoucherCodeMatch, sortRecordsByFormIdDesc, getMatchingPermits, isDateRequiredOutsideValidWindow, isPermitExpiredBackdate, getTodayISO, checkIsBlockedDuplicate, parseFullDateTimeMs, normalizeVouchersList, isRecordCancelled, getRequestedPermitDateISO, isVoucherExactPeriodEligible, isVoucherAvailableStatus, isVoucherVrmCompatible, clearDuplicateCheckCache, extractRecordSubmissionTimeMs, extractRecordNumericFormId, isPermitFuture } from "./utils/csvParser";
 // ⭐ FIX: Import canonical voucher validation helper
-import { isVoucherForPermitDateRange, validateManualVoucherChange, getVoucherValidFromISO, getVoucherValidToISO } from "./utils/voucherValidation";
+import { isVoucherForPermitDateRange, validateManualVoucherChange, getVoucherValidFromISO, getVoucherValidToISO, normalizeDateToISO, addDaysISO } from "./utils/voucherValidation";
 import { CsvDatabasePanel, type CsvDatabasePanelHandle } from "./components/CsvDatabasePanel";
 import { BlocklistPanel } from "./components/BlocklistPanel";
 import { EditRecordModal } from "./components/EditRecordModal";
@@ -515,10 +515,12 @@ export function enrichRecordsWithVouchers(
       assignedPerCustomer.set(customerKey, new Set());
     }
     const custAssignedSet = assignedPerCustomer.get(customerKey)!;
-    const reqIso = getRequestedPermitDateISO(record, fallbackDateStr);
-    const reqIsoTo = record.validTo 
-      ? (parseDateToISO(record.validTo) || (reqIso ? addDaysSafe(reqIso, 6) : ""))
-      : (record.dateExpiry ? (parseDateToISO(record.dateExpiry) || (reqIso ? addDaysSafe(reqIso, 6) : "")) : (reqIso ? addDaysSafe(reqIso, 6) : ""));
+    const reqIso = normalizeDateToISO(record.dateRequired || record.validFrom || getRequestedPermitDateISO(record, fallbackDateStr));
+    const reqIsoTo = normalizeDateToISO(
+      record.validTo || 
+      record.dateExpiry || 
+      (reqIso ? addDaysISO(reqIso, 6) : "")
+    );
 
     // Cancelled or blocked permits MUST NOT claim or consume vouchers
     if (
@@ -547,8 +549,9 @@ export function enrichRecordsWithVouchers(
     if (customOverride && String(customOverride) !== "-" && String(customOverride).toUpperCase() !== "CANCELLED") {
       const clean = cleanVoucherCodeValue(String(customOverride)).toUpperCase();
       const matchingVoucherInDb = voucherByCleanCode.get(clean);
-      const dateMatches = !reqIso || !matchingVoucherInDb || isVoucherForPermitDateRange(matchingVoucherInDb, reqIso, reqIsoTo);
-      if (matchingVoucherInDb && dateMatches && clean && clean !== "-" && clean !== "CANCELLED" && !checkIsAssigned(clean, custAssignedSet)) {
+      const dateMatches = Boolean(reqIso && matchingVoucherInDb && isVoucherForPermitDateRange(matchingVoucherInDb, reqIso, reqIsoTo));
+      const vrmMatches = !matchingVoucherInDb || isVoucherVrmCompatible(matchingVoucherInDb.vrm, cleanVrm);
+      if (matchingVoucherInDb && dateMatches && vrmMatches && clean && clean !== "-" && clean !== "CANCELLED" && !checkIsAssigned(clean, custAssignedSet)) {
         registerCodeGlobally(clean, custAssignedSet);
         recordClaimedCodes.set(index, clean);
       }
@@ -557,9 +560,10 @@ export function enrichRecordsWithVouchers(
       
       // Fast O(1) check: only accept if the code exists in current vouchersDatabase and matches permit date
       const matchingVoucherInDb = voucherByCleanCode.get(clean);
-      const dateMatches = !reqIso || !matchingVoucherInDb || isVoucherForPermitDateRange(matchingVoucherInDb, reqIso, reqIsoTo);
+      const dateMatches = Boolean(reqIso && matchingVoucherInDb && isVoucherForPermitDateRange(matchingVoucherInDb, reqIso, reqIsoTo));
+      const vrmMatches = !matchingVoucherInDb || isVoucherVrmCompatible(matchingVoucherInDb.vrm, cleanVrm);
       
-      if (matchingVoucherInDb && dateMatches && clean !== "-" && clean !== "CANCELLED" && !checkIsAssigned(clean, custAssignedSet)) {
+      if (matchingVoucherInDb && dateMatches && vrmMatches && clean !== "-" && clean !== "CANCELLED" && !checkIsAssigned(clean, custAssignedSet)) {
         registerCodeGlobally(clean, custAssignedSet);
         recordClaimedCodes.set(index, clean);
       }
@@ -571,10 +575,12 @@ export function enrichRecordsWithVouchers(
   chronologicalIndices.forEach((index) => {
     const record = recordsList[index];
     const cleanVrm = record.vrm ? record.vrm.toUpperCase().replace(/[^A-Z0-9]/g, "") : "";
-    const reqDateD = getRequestedPermitDateISO(record, fallbackDateStr);
-    const reqDateToD = record.validTo 
-      ? (parseDateToISO(record.validTo) || (reqDateD ? addDaysSafe(reqDateD, 6) : ""))
-      : (record.dateExpiry ? (parseDateToISO(record.dateExpiry) || (reqDateD ? addDaysSafe(reqDateD, 6) : "")) : (reqDateD ? addDaysSafe(reqDateD, 6) : ""));
+    const reqDateD = normalizeDateToISO(record.dateRequired || record.validFrom || getRequestedPermitDateISO(record, fallbackDateStr));
+    const reqDateToD = normalizeDateToISO(
+      record.validTo || 
+      record.dateExpiry || 
+      (reqDateD ? addDaysISO(reqDateD, 6) : "")
+    );
 
     // Any VRM on the actual security blocklist is always blocked
     if (isVrmSilentBlockedSync(record.vrm)) {
@@ -589,8 +595,8 @@ export function enrichRecordsWithVouchers(
 
     if (isRecordCancelled(record, reqDateD || fallbackDateStr, recordsList) || isPermitExpiredBackdate(record, reqDateD || fallbackDateStr)) {
       const isBackdate = isPermitExpiredBackdate(record, reqDateD || fallbackDateStr);
-      const reqIso = parseDateToISO(record.dateRequired || record.validFrom || "");
-      const isExpired7Days = Boolean(fallbackDateStr && reqIso && Math.floor((new Date(reqIso + "T00:00:00").getTime() - new Date(parseDateToISO(fallbackDateStr) + "T00:00:00").getTime()) / 86400000) <= -7);
+      const reqIso = normalizeDateToISO(record.dateRequired || record.validFrom || "");
+      const isExpired7Days = Boolean(fallbackDateStr && reqIso && Math.floor((new Date(reqIso + "T00:00:00").getTime() - new Date(normalizeDateToISO(fallbackDateStr) + "T00:00:00").getTime()) / 86400000) <= -7);
       const determinedReason = record.cancellationReason ||
         (isVrmSilentBlockedSync(record.vrm) ? "BLOCKLIST" :
         (isBackdate || isExpired7Days) ? "EXPIRED" :
@@ -636,9 +642,8 @@ export function enrichRecordsWithVouchers(
     }
     const custAssignedSet = assignedPerCustomer.get(customerKey)!;
 
-    // Fast bucketed candidates for this date period
-    const periodBucket = availableVouchersByPeriod.get(`${reqDateD}_${reqDateToD}`);
-    const candidateList = periodBucket && periodBucket.length > 0 ? periodBucket : vouchersList;
+    // Fast bucketed candidates for this date period (no fallback to whole voucher list)
+    const candidateList = availableVouchersByPeriod.get(`${reqDateD}_${reqDateToD}`) ?? [];
 
     // Filter available vouchers eligible for this EXACT requested permit date D
     const eligibleVouchers = candidateList.filter(v => {
@@ -2616,6 +2621,22 @@ export default function App() {
     const currentDb = databaseRef.current || [];
     const previousRecord = currentDb.find(item => isRecordMatch(item, updatedRecord)) || null;
 
+    if (previousRecord) {
+      const oldDate = normalizeDateToISO(previousRecord.dateRequired || previousRecord.validFrom);
+      const newDate = normalizeDateToISO(updatedRecord.dateRequired || updatedRecord.validFrom);
+      const oldVrm = (previousRecord.vrm || "").toUpperCase().replace(/\s+/g, "");
+
+      if (oldDate !== newDate) {
+        const nextCustom = { ...customVouchersRef.current };
+        if (previousRecord.formId) delete nextCustom[String(previousRecord.formId)];
+        if (previousRecord.id) delete nextCustom[String(previousRecord.id)];
+        if (oldVrm && oldDate) delete nextCustom[`${oldVrm}_${oldDate}`];
+        setCustomVouchers(nextCustom);
+        customVouchersRef.current = nextCustom;
+        safeLocalStorage.setItem("concessions_custom_vouchers", JSON.stringify(nextCustom));
+      }
+    }
+
     let recordFound = false;
     const updatedDb = currentDb.map(item => {
       if (isRecordMatch(item, updatedRecord)) {
@@ -2642,14 +2663,13 @@ export default function App() {
     // Persist custom voucher override if edited or replacement assigned
     if (updatedRecord.replacementCode !== undefined || updatedRecord.voucherCode !== undefined) {
       const cleanVrm = updatedRecord.vrm ? updatedRecord.vrm.toUpperCase().replace(/\s+/g, "") : "";
-      const dateISO = parseDateToISO(updatedRecord.dateRequired || "") || getTodayISO();
+      const dateISO = normalizeDateToISO(updatedRecord.dateRequired || updatedRecord.validFrom);
       const codeVal = updatedRecord.replacementCode || updatedRecord.voucherCode || "-";
 
       const nextCustom = { ...customVouchersRef.current };
       if (updatedRecord.formId) nextCustom[String(updatedRecord.formId)] = codeVal;
       if (updatedRecord.id) nextCustom[String(updatedRecord.id)] = codeVal;
       if (cleanVrm && dateISO) nextCustom[`${cleanVrm}_${dateISO}`] = codeVal;
-      if (cleanVrm) nextCustom[cleanVrm] = codeVal;
 
       setCustomVouchers(nextCustom);
       customVouchersRef.current = nextCustom;
@@ -3062,9 +3082,12 @@ export default function App() {
     const currentForm = formDataRef.current;
     let newVoucherCode = (record.replacementCode || (isRecordMatch(record, currentForm) ? currentForm.replacementCode : "") || "").trim().toUpperCase();
     if (!newVoucherCode || newVoucherCode === "-" || newVoucherCode === "CANCELLED" || newVoucherCode === "PENDING") {
-      // Find an unused voucher in vouchersDatabase
+      const permitFrom = record.validFrom || record.dateRequired || "";
+      const permitTo = record.validTo || record.dateExpiry || (permitFrom ? addDaysISO(normalizeDateToISO(permitFrom), 6) : "");
+      // Find an unused voucher in vouchersDatabase matching date range
       const availableUnused = (vouchersDatabaseRef.current || []).find(v => {
-        if (!v || !v.code || v.isUsed) return false;
+        if (!v || !v.code || !isVoucherAvailableStatus(v)) return false;
+        if (!isVoucherForPermitDateRange(v, permitFrom, permitTo)) return false;
         const clean = cleanVoucherCodeValue(v.code).toUpperCase();
         if (!clean || clean === "-" || clean === "CANCELLED" || clean === "PENDING") return false;
         const inUse = (databaseRef.current || []).some(r => !isRecordMatch(r, record) && isVoucherCodeMatch(r.voucherCode, clean));
@@ -3074,19 +3097,14 @@ export default function App() {
       if (availableUnused && availableUnused.code) {
         newVoucherCode = cleanVoucherCodeValue(availableUnused.code).toUpperCase();
         setVouchersDatabase(prev => {
-          const next = prev.map(v => v.code === availableUnused.code ? { ...v, isUsed: true } : v);
+          const next = prev.map(v => v.code === availableUnused.code ? { ...v, isUsed: true, status: "used" } : v);
           vouchersDatabaseRef.current = next;
           safeLocalStorage.setItem("concessions_vouchers_db", JSON.stringify(next));
           return next;
         });
       } else {
-        // Auto-generate genuine alphanumeric concession voucher code
-        const chars = "0123456789ABCDEFGHJKLMNPQRSTUVWXYZ";
-        let rand = "";
-        for (let i = 0; i < 10; i++) {
-          rand += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
-        newVoucherCode = `NHS${rand}`;
+        showToast("No unused voucher available for this permit's date range", "warning");
+        return;
       }
     }
 
@@ -3169,10 +3187,9 @@ export default function App() {
       const next = { ...prev };
       if (record.formId) next[String(record.formId)] = newVoucherCode;
       if (record.id) next[String(record.id)] = newVoucherCode;
-      if (normVrm) {
-        const dateISO = parseDateToISO(record.dateRequired || record.validFrom || "") || getTodayISO();
-        next[normVrm] = newVoucherCode;
-        if (dateISO) next[`${normVrm}_${dateISO}`] = newVoucherCode;
+      const dateISO = normalizeDateToISO(record.dateRequired || record.validFrom);
+      if (normVrm && dateISO) {
+        next[`${normVrm}_${dateISO}`] = newVoucherCode;
       }
       safeLocalStorage.setItem("concessions_custom_vouchers", JSON.stringify(next));
       return next;
