@@ -1964,11 +1964,7 @@ export default function App() {
     let unsubscribe: (() => void) | null = null;
     let pollInterval: ReturnType<typeof setInterval> | null = null;
 
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && storageModeRef.current === "cloud") {
-        refreshDatabase(undefined, true);
-      }
-    };
+
 
     const initAndFetch = async () => {
       // If offline mode is active, ensure memory is hydrated and do not connect to Supabase
@@ -2083,7 +2079,7 @@ export default function App() {
           }
         }, 300000);
 
-        window.addEventListener("visibilitychange", handleVisibilityChange);
+
       } else {
         if (!databaseRef.current || databaseRef.current.length === 0) {
           const localPermits = safeLocalStorage.getItem("concessions_permit_db");
@@ -2126,7 +2122,7 @@ export default function App() {
     return () => {
       if (unsubscribe) unsubscribe();
       if (pollInterval) clearInterval(pollInterval);
-      window.removeEventListener("visibilitychange", handleVisibilityChange);
+
     };
   }, [storageMode]);
 
