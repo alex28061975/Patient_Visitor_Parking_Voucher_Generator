@@ -72,6 +72,29 @@ let lastInputRef: CsvPermitRecord[] | null = null;
 let lastOutputRef: CsvPermitRecord[] | null = null;
 let lastSig = "";
 
+export const getCurrentCode = (r: CsvPermitRecord): string | undefined => {
+  const c = r.replacementCode || r.voucherCode || r.prePaidCode || "";
+  if (c && c !== "-" && c !== "CANCELLED" && c !== "PENDING") {
+    return cleanVoucherCodeValue(c).toUpperCase();
+  }
+  return undefined;
+};
+
+export const getPreservedVoucher = (r: CsvPermitRecord): string | undefined => {
+  const cur = getCurrentCode(r);
+  if (cur) return cur;
+  if (r.replacementCode && r.replacementCode !== "-" && r.replacementCode !== "CANCELLED") {
+    return cleanVoucherCodeValue(r.replacementCode).toUpperCase();
+  }
+  if (r.preCancelVoucherCode && r.preCancelVoucherCode !== "-" && r.preCancelVoucherCode !== "CANCELLED") {
+    return cleanVoucherCodeValue(r.preCancelVoucherCode).toUpperCase();
+  }
+  if (r.originalVoucherCode && r.originalVoucherCode !== "-" && r.originalVoucherCode !== "CANCELLED") {
+    return cleanVoucherCodeValue(r.originalVoucherCode).toUpperCase();
+  }
+  return undefined;
+};
+
 // ⭐ Auto-Cancel Duplicates - GROUP BY VRM ONLY, earliest submission timestamp wins
 export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecord[] => {
   if (!records || records.length === 0) return records;
@@ -115,11 +138,9 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
     const isExpired = isBackdateExpired || Boolean(isExpiredDate) || (record.cancellationReason === "EXPIRED" && (!record.vrm || record.vrm === "PENDING" || record.vrm === "-"));
 
     if (isExpired) {
-      const preservedVoucher = (record.originalVoucherCode && record.originalVoucherCode !== "CANCELLED" && record.originalVoucherCode !== "-")
-        ? record.originalVoucherCode
-        : (record.voucherCode && record.voucherCode !== "CANCELLED" && record.voucherCode !== "-")
-          ? record.voucherCode
-          : undefined;
+      const currentCode = getCurrentCode(record);
+      const preCancelVoucherCode = currentCode || record.preCancelVoucherCode;
+      const originalVoucherCode = record.originalVoucherCode || currentCode;
 
       results[index] = {
         ...record,
@@ -128,7 +149,8 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
         cancellationReason: "EXPIRED",
         voucherCode: "CANCELLED",
         prePaidCode: "CANCELLED",
-        originalVoucherCode: preservedVoucher || record.originalVoucherCode
+        preCancelVoucherCode,
+        originalVoucherCode
       };
       return;
     }
@@ -177,11 +199,9 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
         entry.record.voucherCodesText === "CANCELLED";
 
       if (genuine) {
-        const preservedVoucher = (entry.record.originalVoucherCode && entry.record.originalVoucherCode !== "CANCELLED" && entry.record.originalVoucherCode !== "-")
-          ? entry.record.originalVoucherCode
-          : (entry.record.voucherCode && entry.record.voucherCode !== "CANCELLED" && entry.record.voucherCode !== "-")
-            ? entry.record.voucherCode
-            : undefined;
+        const currentCode = getCurrentCode(entry.record);
+        const preCancelVoucherCode = currentCode || entry.record.preCancelVoucherCode;
+        const originalVoucherCode = entry.record.originalVoucherCode || currentCode;
 
         results[entry.index] = {
           ...entry.record,
@@ -190,7 +210,8 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
           cancellationReason: entry.record.cancellationReason || (isPermitFuture(entry.record) ? "FUTURE" : (isPermitExpiredBackdate(entry.record) ? "EXPIRED" : "MANUAL")),
           voucherCode: "CANCELLED",
           prePaidCode: "CANCELLED",
-          originalVoucherCode: preservedVoucher || entry.record.originalVoucherCode
+          preCancelVoucherCode,
+          originalVoucherCode
         };
         continue;
       }
@@ -198,11 +219,9 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
       // An earlier record is restored from CANCELLED to ACTIVE ONLY when the cancellation
       // was caused by duplicate-VRM processing. Genuinely cancelled records (MANUAL, BLOCKLIST, EXPIRED) must NEVER be automatically restored!
       if (wasCancelled && !genuine) {
-        const preservedVoucher = (entry.record.originalVoucherCode && entry.record.originalVoucherCode !== "CANCELLED" && entry.record.originalVoucherCode !== "-")
-          ? entry.record.originalVoucherCode
-          : (entry.record.voucherCode && entry.record.voucherCode !== "CANCELLED" && entry.record.voucherCode !== "-")
-            ? entry.record.voucherCode
-            : undefined;
+        const preservedVoucher = getPreservedVoucher(entry.record);
+        const preCancelVoucherCode = getCurrentCode(entry.record) || entry.record.preCancelVoucherCode;
+        const originalVoucherCode = entry.record.originalVoucherCode || preservedVoucher;
 
         results[entry.index] = {
           ...entry.record,
@@ -211,7 +230,8 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
           voucherCode: preservedVoucher || (entry.record.voucherCode === "CANCELLED" ? "" : entry.record.voucherCode || ""),
           prePaidCode: preservedVoucher || (entry.record.prePaidCode === "CANCELLED" ? "" : entry.record.prePaidCode || ""),
           voucherCodesText: entry.record.voucherCodesText === "CANCELLED" ? (preservedVoucher || "") : (entry.record.voucherCodesText || preservedVoucher || ""),
-          originalVoucherCode: preservedVoucher || entry.record.originalVoucherCode,
+          originalVoucherCode,
+          preCancelVoucherCode,
           cancellationReason: undefined
         };
       } else {
@@ -260,11 +280,9 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
           })
         : undefined;
 
-      const preservedVoucher = (entry.record.originalVoucherCode && entry.record.originalVoucherCode !== "CANCELLED" && entry.record.originalVoucherCode !== "-")
-        ? entry.record.originalVoucherCode
-        : (entry.record.voucherCode && entry.record.voucherCode !== "CANCELLED" && entry.record.voucherCode !== "-")
-          ? entry.record.voucherCode
-          : undefined;
+      const preservedVoucher = getPreservedVoucher(entry.record);
+      const preCancelVoucherCode = getCurrentCode(entry.record) || entry.record.preCancelVoucherCode;
+      const originalVoucherCode = entry.record.originalVoucherCode || preservedVoucher;
 
       if (earlierKept) {
         // DUPLICATE DETECTED
@@ -295,7 +313,8 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
           status: "CANCELLED",
           voucherCode: "CANCELLED",
           prePaidCode: "CANCELLED",
-          originalVoucherCode: preservedVoucher || entry.record.originalVoucherCode,
+          preCancelVoucherCode,
+          originalVoucherCode,
           cancellationReason: (entry.record.cancellationReason === "MANUAL" || entry.record.cancellationReason === "BLOCKLIST" || entry.record.cancellationReason === "EXPIRED" || entry.record.cancellationReason === "FUTURE")
             ? entry.record.cancellationReason
             : "DUPLICATE_VRM"
@@ -313,7 +332,8 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
           cancellationReason: entry.record.cancellationReason || (isPermitFuture(entry.record) ? "FUTURE" : (isPermitExpiredBackdate(entry.record) ? "EXPIRED" : "MANUAL")),
           voucherCode: "CANCELLED",
           prePaidCode: "CANCELLED",
-          originalVoucherCode: preservedVoucher || entry.record.originalVoucherCode
+          preCancelVoucherCode,
+          originalVoucherCode
         };
         continue;
       }
@@ -327,7 +347,8 @@ export const autoCancelDuplicates = (records: CsvPermitRecord[]): CsvPermitRecor
         voucherCode: preservedVoucher || (entry.record.voucherCode === "CANCELLED" ? "" : entry.record.voucherCode || ""),
         prePaidCode: preservedVoucher || (entry.record.prePaidCode === "CANCELLED" ? "" : entry.record.prePaidCode || ""),
         voucherCodesText: entry.record.voucherCodesText === "CANCELLED" ? (preservedVoucher || "") : (entry.record.voucherCodesText || preservedVoucher || ""),
-        originalVoucherCode: preservedVoucher || entry.record.originalVoucherCode,
+        originalVoucherCode,
+        preCancelVoucherCode: entry.record.preCancelVoucherCode,
         cancellationReason: undefined
       };
 
@@ -354,6 +375,7 @@ export function enrichRecordsWithVouchers(
   unsentKeys: string[] = []
 ): CsvPermitRecord[] {
   const assignedGlobally = new Set<string>();
+  const codeReservedByRecordIds = new Map<string, Set<string>>();
   const assignedPerCustomer = new Map<string, Set<string>>();
 
   const getCustomerKey = (rec: CsvPermitRecord) => {
@@ -363,17 +385,7 @@ export function enrichRecordsWithVouchers(
     return `driver:${(rec.driverName || "").trim().toUpperCase()}`;
   };
 
-  const checkIsAssigned = (codeUpper: string, custSet: Set<string>): boolean => {
-    if (!codeUpper || codeUpper === "-" || codeUpper === "CANCELLED") return false;
-    const clean = cleanVoucherCodeValue(codeUpper);
-    if (assignedGlobally.has(codeUpper)) return true;
-    if (clean && clean !== "-" && assignedGlobally.has(clean)) return true;
-    if (custSet.has(codeUpper)) return true;
-    if (clean && clean !== "-" && custSet.has(clean)) return true;
-    return false;
-  };
-
-  const registerCodeGlobally = (codeStr: string, custSet?: Set<string>) => {
+  const registerCodeGlobally = (codeStr: string, recId?: string, custSet?: Set<string>) => {
     if (!codeStr || codeStr === "-" || codeStr === "CANCELLED") return;
     const parts = codeStr.split(/[\n,;\s]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
     parts.forEach(p => {
@@ -381,6 +393,14 @@ export function enrichRecordsWithVouchers(
         assignedGlobally.add(p);
         const clean = cleanVoucherCodeValue(p);
         if (clean && clean !== "-") assignedGlobally.add(clean);
+        if (recId) {
+          if (!codeReservedByRecordIds.has(p)) codeReservedByRecordIds.set(p, new Set());
+          codeReservedByRecordIds.get(p)!.add(recId);
+          if (clean && clean !== "-") {
+            if (!codeReservedByRecordIds.has(clean)) codeReservedByRecordIds.set(clean, new Set());
+            codeReservedByRecordIds.get(clean)!.add(recId);
+          }
+        }
         if (custSet) {
           custSet.add(p);
           if (clean && clean !== "-") custSet.add(clean);
@@ -388,6 +408,41 @@ export function enrichRecordsWithVouchers(
       }
     });
   };
+
+  const checkIsAssigned = (codeUpper: string, custSet: Set<string>, currentRecId?: string): boolean => {
+    if (!codeUpper || codeUpper === "-" || codeUpper === "CANCELLED") return false;
+    const clean = cleanVoucherCodeValue(codeUpper);
+
+    const isAssignedByOther = (code: string) => {
+      const reservedSet = codeReservedByRecordIds.get(code);
+      if (!reservedSet) return assignedGlobally.has(code);
+      for (const id of reservedSet) {
+        if (!currentRecId || id !== currentRecId) return true;
+      }
+      return false;
+    };
+
+    if (isAssignedByOther(codeUpper)) return true;
+    if (clean && clean !== "-" && isAssignedByOther(clean)) return true;
+    if (custSet.has(codeUpper)) return true;
+    if (clean && clean !== "-" && custSet.has(clean)) return true;
+    return false;
+  };
+
+  recordsList.forEach((rec, idx) => {
+    const recId = String(rec.formId || rec.id || idx);
+    const recDateISO = getRequestedPermitDateISO(rec, fallbackDateStr);
+    const isCancelledRec = isRecordCancelled(rec, recDateISO || fallbackDateStr, recordsList) || isPermitExpiredBackdate(rec, recDateISO || fallbackDateStr) || rec.isCancelled === true || rec.status === 'CANCELLED';
+    const wasSent = rec.status === 'SENT' || rec.status === 'sent' || rec.isDispatched === true || rec.emailSent === true || dispatchedKeys.includes(String(rec.formId || rec.id));
+    const shouldReserveOriginal = !isCancelledRec || wasSent;
+
+    if (shouldReserveOriginal && rec.originalVoucherCode && rec.originalVoucherCode !== "-" && rec.originalVoucherCode !== "CANCELLED") {
+      registerCodeGlobally(rec.originalVoucherCode, recId);
+    }
+    if (rec.replacementCode && rec.replacementCode !== "-" && rec.replacementCode !== "CANCELLED") {
+      registerCodeGlobally(rec.replacementCode, recId);
+    }
+  });
 
   const mapRecordFallback = (record: CsvPermitRecord, index: number, defaultVal: string) => {
     const cleanVrm = record.vrm ? record.vrm.toUpperCase().replace(/[^A-Z0-9]/g, "") : "";

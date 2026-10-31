@@ -427,6 +427,7 @@ function EditRecordModalComponent({
       isDispatched: !isCancelledFinal && formStatus === "SENT",
       // Replacement fields
       replacementCode: finalHasReplacement ? finalReplacement : undefined,
+      originalVoucherCode: record.originalVoucherCode || (finalHasReplacement ? (origCode !== "-" && origCode !== "CANCELLED" ? origCode : undefined) : undefined),
       emailType: finalHasReplacement ? "RESEND_CONCESSION" : (record.emailType === "RESEND_CONCESSION" ? "SEND_CONCESSION" : record.emailType),
       isResend: finalHasReplacement ? true : false,
       emailTemplate: finalHasReplacement ? "replacement" : (record.emailTemplate === "replacement" ? "new" : record.emailTemplate)

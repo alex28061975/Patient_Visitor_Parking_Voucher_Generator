@@ -241,6 +241,7 @@ export interface CsvPermitRecord {
   emailTemplate?: "new" | "replacement";
   replacementCode?: string;
   originalVoucherCode?: string;
+  preCancelVoucherCode?: string;
   replacementCount?: number;
   cancellationReason?: "DUPLICATE_VRM" | "BLOCKLIST" | "EXPIRED" | "MANUAL" | string;
 }
@@ -2393,10 +2394,7 @@ export function getVoucherDateISO(voucher: ParsedVoucherData | undefined | null)
                   voucher.valid_from ||
                   voucher.ValidFrom ||
                   voucher.startDate ||
-                  voucher.start_date ||
-                  voucher.date ||
-                  voucher.dateRequired ||
-                  voucher.uploadDate;
+                  voucher.start_date;
   if (!rawFrom) return "";
   const vIso = parseDateToISO(String(rawFrom));
   return vIso && /^\d{4}-\d{2}-\d{2}$/.test(vIso) ? vIso : "";
@@ -2419,10 +2417,7 @@ export function isVoucherInValidityPeriod(
                   voucher.valid_from ||
                   voucher.ValidFrom ||
                   voucher.startDate ||
-                  voucher.start_date ||
-                  voucher.date ||
-                  voucher.dateRequired ||
-                  voucher.uploadDate;
+                  voucher.start_date;
   const rawTo = voucher.validTo ||
                 voucher.valid_to ||
                 voucher.ValidTo ||

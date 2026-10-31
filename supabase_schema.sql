@@ -21,7 +21,11 @@ CREATE TABLE IF NOT EXISTS public.permits (
   phone TEXT,
   email TEXT,
   voucher_code TEXT,
+  replacement_code TEXT,
+  original_voucher_code TEXT,
+  pre_cancel_voucher_code TEXT,
   start_time TEXT,
+  completion_time TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

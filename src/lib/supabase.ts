@@ -193,6 +193,9 @@ export interface SupabasePermit {
   phone?: string;
   email?: string;
   voucher_code?: string;
+  replacement_code?: string;
+  original_voucher_code?: string;
+  pre_cancel_voucher_code?: string;
   start_time?: string;
   completion_time?: string;  // ✅ Column C from Excel
   created_at?: string;
@@ -200,9 +203,21 @@ export interface SupabasePermit {
 }
 
 let cancellationColumnAvailable: boolean | null = null;
+let replacementColumnsAvailable: boolean | null = null;
 const isMissingCancellationColumnError = (err: any) => String(err?.message || err || '').toLowerCase().includes('cancellation_reason');
+const isMissingReplacementColumnsError = (err: any) => {
+  const s = String(err?.message || err || '').toLowerCase();
+  return s.includes('replacement_code') || s.includes('original_voucher_code') || s.includes('pre_cancel_voucher_code');
+};
+
+const PERMIT_SELECT_FULL = 'id, hospital, ward, date_required, date_expiry, vrm, driver_name, phone, email, voucher_code, replacement_code, original_voucher_code, pre_cancel_voucher_code, start_time, completion_time, created_at';
 const PERMIT_SELECT_BASE = 'id, hospital, ward, date_required, date_expiry, vrm, driver_name, phone, email, voucher_code, start_time, completion_time, created_at';
-const PERMIT_SELECT_WITH_REASON = PERMIT_SELECT_BASE + ', cancellation_reason';
+
+const getSelectCols = (withReason: boolean) => {
+  const base = replacementColumnsAvailable === false ? PERMIT_SELECT_BASE : PERMIT_SELECT_FULL;
+  return withReason ? base + ', cancellation_reason' : base;
+};
+
 const cancellationReasonForDb = (r: { cancellationReason?: string; isCancelled?: boolean; status?: string; voucherCode?: string }): string | null => {
   const cancelled = r.isCancelled === true || String(r.status || '').trim().toUpperCase() === 'CANCELLED' || String(r.voucherCode || '').trim().toUpperCase() === 'CANCELLED';
   return cancelled && r.cancellationReason ? String(r.cancellationReason) : null;
@@ -234,7 +249,7 @@ export const fetchPermitsFromSupabase = async (options?: { daysLimit?: number | 
       const from = page * pageSize;
       const to = from + pageSize - 1;
 
-      const selectCols = cancellationColumnAvailable === false ? PERMIT_SELECT_BASE : PERMIT_SELECT_WITH_REASON;
+      const selectCols = getSelectCols(true);
       let query = client
         .from('permits')
         .select(selectCols)
@@ -247,11 +262,12 @@ export const fetchPermitsFromSupabase = async (options?: { daysLimit?: number | 
 
       let { data, error }: { data: any; error: any } = await query;
 
-      if (error && cancellationColumnAvailable === null && isMissingCancellationColumnError(error)) {
-        cancellationColumnAvailable = false;
+      if (error && (replacementColumnsAvailable === null || cancellationColumnAvailable === null) && (isMissingReplacementColumnsError(error) || isMissingCancellationColumnError(error))) {
+        if (isMissingReplacementColumnsError(error)) replacementColumnsAvailable = false;
+        if (isMissingCancellationColumnError(error)) cancellationColumnAvailable = false;
         let retryQuery = client
           .from('permits')
-          .select(PERMIT_SELECT_BASE)
+          .select(getSelectCols(true))
           .range(from, to)
           .order('created_at', { ascending: false });
         if (cutoffISO) {
@@ -267,6 +283,9 @@ export const fetchPermitsFromSupabase = async (options?: { daysLimit?: number | 
         break;
       }
 
+      if (replacementColumnsAvailable === null && !error) {
+        replacementColumnsAvailable = true;
+      }
       if (cancellationColumnAvailable === null && !error) {
         cancellationColumnAvailable = true;
       }
@@ -298,6 +317,9 @@ export const fetchPermitsFromSupabase = async (options?: { daysLimit?: number | 
       phone: item.phone || '',
       email: item.email || '',
       voucherCode: item.voucher_code || '',
+      replacementCode: item.replacement_code || undefined,
+      originalVoucherCode: item.original_voucher_code || undefined,
+      preCancelVoucherCode: item.pre_cancel_voucher_code || undefined,
       startTime: item.start_time || undefined,
       completionTime: item.completion_time || undefined,  // ✅ Map completion_time from Supabase
       createdAt: item.created_at || undefined,
@@ -365,7 +387,7 @@ export const syncPermitsToSupabase = async (records: CsvPermitRecord[], replaceA
 
     if (records.length === 0) return true;
 
-    // Upsert payload with completion_time
+    // Upsert payload with completion_time and replacement columns
     const basePayload = records.map(r => ({
       id: r.id,
       hospital: r.hospital || '',
@@ -377,23 +399,38 @@ export const syncPermitsToSupabase = async (records: CsvPermitRecord[], replaceA
       phone: r.phone || null,
       email: r.email || null,
       voucher_code: r.voucherCode || null,
+      replacement_code: r.replacementCode || null,
+      original_voucher_code: r.originalVoucherCode || null,
+      pre_cancel_voucher_code: r.preCancelVoucherCode || null,
       start_time: r.startTime || null,
       completion_time: r.completionTime || null,  // ✅ Sync completion_time to Supabase
       cancellation_reason: cancellationReasonForDb(r),
     }));
 
+    const getPayloadForDb = (obj: any) => {
+      let p = { ...obj };
+      if (cancellationColumnAvailable === false) {
+        delete p.cancellation_reason;
+      }
+      if (replacementColumnsAvailable === false) {
+        delete p.replacement_code;
+        delete p.original_voucher_code;
+        delete p.pre_cancel_voucher_code;
+      }
+      return p;
+    };
+
     const BATCH_SIZE = 400;
     let success = true;
     for (let i = 0; i < basePayload.length; i += BATCH_SIZE) {
       let chunk: any[] = basePayload.slice(i, i + BATCH_SIZE);
-      if (cancellationColumnAvailable === false) {
-        chunk = chunk.map(({ cancellation_reason, ...rest }) => rest);
-      }
-      let { error } = await client.from('permits').upsert(chunk, { onConflict: 'id' });
-      if (error && cancellationColumnAvailable !== false && isMissingCancellationColumnError(error)) {
-        cancellationColumnAvailable = false;
-        const retryChunk = chunk.map(({ cancellation_reason, ...rest }) => rest);
-        const retryRes = await client.from('permits').upsert(retryChunk, { onConflict: 'id' });
+      let payloadChunk = chunk.map(item => getPayloadForDb(item));
+      let { error } = await client.from('permits').upsert(payloadChunk, { onConflict: 'id' });
+      if (error && (replacementColumnsAvailable !== false || cancellationColumnAvailable !== false) && (isMissingReplacementColumnsError(error) || isMissingCancellationColumnError(error))) {
+        if (isMissingReplacementColumnsError(error)) replacementColumnsAvailable = false;
+        if (isMissingCancellationColumnError(error)) cancellationColumnAvailable = false;
+        payloadChunk = chunk.map(item => getPayloadForDb(item));
+        const retryRes = await client.from('permits').upsert(payloadChunk, { onConflict: 'id' });
         error = retryRes.error;
       }
       if (error) {
@@ -401,8 +438,9 @@ export const syncPermitsToSupabase = async (records: CsvPermitRecord[], replaceA
         success = false;
       }
     }
-    if (success && cancellationColumnAvailable === null) {
-      cancellationColumnAvailable = true;
+    if (success) {
+      if (replacementColumnsAvailable === null) replacementColumnsAvailable = true;
+      if (cancellationColumnAvailable === null) cancellationColumnAvailable = true;
     }
     return success;
   } catch (err) {
@@ -442,7 +480,7 @@ export const updatePermitInSupabase = async (record: CsvPermitRecord): Promise<b
     return false;
   }
 
-  const basePayload = {
+  const rawPayload = {
     id: permitId,
     hospital: record.hospital || (record as any).site || '',
     ward: record.ward || '',
@@ -453,24 +491,33 @@ export const updatePermitInSupabase = async (record: CsvPermitRecord): Promise<b
     phone: record.phone || null,
     email: record.email || (record as any).driverEmail || null,
     voucher_code: record.voucherCode || (record as any).prePaidCode || null,
+    replacement_code: record.replacementCode || null,
+    original_voucher_code: record.originalVoucherCode || null,
+    pre_cancel_voucher_code: record.preCancelVoucherCode || null,
     start_time: record.startTime || null,
     completion_time: record.completionTime || null,
     cancellation_reason: cancellationReasonForDb(record),
   };
 
   const getPayloadForDb = () => {
+    let p = { ...rawPayload };
     if (cancellationColumnAvailable === false) {
-      const { cancellation_reason, ...rest } = basePayload;
-      return rest;
+      delete p.cancellation_reason;
     }
-    return basePayload;
+    if (replacementColumnsAvailable === false) {
+      delete p.replacement_code;
+      delete p.original_voucher_code;
+      delete p.pre_cancel_voucher_code;
+    }
+    return p;
   };
 
   try {
     let payload = getPayloadForDb();
     let { error } = await client.from('permits').upsert(payload, { onConflict: 'id' });
-    if (error && cancellationColumnAvailable !== false && isMissingCancellationColumnError(error)) {
-      cancellationColumnAvailable = false;
+    if (error && (replacementColumnsAvailable !== false || cancellationColumnAvailable !== false) && (isMissingReplacementColumnsError(error) || isMissingCancellationColumnError(error))) {
+      if (isMissingReplacementColumnsError(error)) replacementColumnsAvailable = false;
+      if (isMissingCancellationColumnError(error)) cancellationColumnAvailable = false;
       payload = getPayloadForDb();
       const retryRes = await client.from('permits').upsert(payload, { onConflict: 'id' });
       error = retryRes.error;

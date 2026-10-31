@@ -10,6 +10,8 @@ import {
   isDateRequiredOutsideValidWindow,
   parseDateToISO,
   addDaysSafe,
+  normalizeVoucherData,
+  normalizeVouchersList,
   CsvPermitRecord,
   ParsedVoucherData
 } from '../utils/csvParser';
@@ -1851,6 +1853,21 @@ CON_ERR_2,,`;
     assert.equal(normalizeDateToISO('46279'), '2026-09-14');
     assert.equal(normalizeDateToISO('garbage'), '');
 
+    // 2. normalizeVoucherData checks (no fabricated dates, no default +6)
+    const norm1 = normalizeVoucherData({ code: 'X', uploadDate: '2026-09-14' });
+    assert.equal(norm1.validFrom, undefined);
+    assert.equal(norm1.validTo, undefined);
+    assert.equal(isVoucherForPermitDateRange(norm1, '2026-09-14', '2026-09-20'), false);
+
+    const norm2 = normalizeVoucherData({ code: 'X', date: '2026-09-21' });
+    assert.equal(norm2.validTo, undefined);
+
+    const norm3 = normalizeVoucherData({ code: 'X', validFrom: '2026-09-14', validTo: '2026-09-20' });
+    assert.equal(norm3.validFrom, '2026-09-14');
+    assert.equal(norm3.validTo, '2026-09-20');
+
+    // 3. normalizeVouchersList + enrichRecordsWithVouchers for uploadDate voucher
+    const vList = normalizeVouchersList([{ code: 'X', uploadDate: '2026-09-14' }]);
     const permit = makePermit({
       id: 'p1',
       formId: 'p1',
@@ -1859,6 +1876,34 @@ CON_ERR_2,,`;
       validTo: '2026-09-20',
       dateRequired: '2026-09-14'
     });
+    const enriched = enrichRecordsWithVouchers([permit], vList, {}, '2026-09-14');
+    assert.equal(enriched[0].voucherCode, '-');
+
+    // 4. validateManualVoucherChange expiry change check
+    const voucherDb: ParsedVoucherData[] = [
+      { code: 'V_EXACT', validFrom: '2026-09-14', validTo: '2026-09-20', status: 'available', isUsed: false }
+    ];
+    const resExpiryChanged = validateManualVoucherChange({
+      origCode: 'V_EXACT',
+      newCode: 'V_EXACT',
+      permitDateRequired: '2026-09-14',
+      permitDateExpiry: '2026-09-18', // changed expiry
+      origDateRequired: '2026-09-14',
+      origDateExpiry: '2026-09-20',
+      vouchersDatabase: voucherDb
+    });
+    assert.equal(resExpiryChanged.isValid, false);
+
+    const resSameDates = validateManualVoucherChange({
+      origCode: 'V_EXACT',
+      newCode: 'V_EXACT',
+      permitDateRequired: '2026-09-14',
+      permitDateExpiry: '2026-09-20',
+      origDateRequired: '2026-09-14',
+      origDateExpiry: '2026-09-20',
+      vouchersDatabase: voucherDb
+    });
+    assert.equal(resSameDates.isValid, true);
 
     // Undated voucher
     const undatedVoucher: ParsedVoucherData = { code: 'V1', status: 'active', isUsed: false };
@@ -1880,9 +1925,8 @@ CON_ERR_2,,`;
     const shortVoucher: ParsedVoucherData = { code: 'V5', validFrom: '2026-09-14', validTo: '2026-09-18', status: 'active', isUsed: false };
     assert.equal(isVoucherForPermitDateRange(shortVoucher, '2026-09-14', '2026-09-20'), false);
 
-    // enrichRecordsWithVouchers does not assign any voucher when only wrong-week or undated vouchers exist
-    const enriched = enrichRecordsWithVouchers([permit], [undatedVoucher, nextWeekVoucher], {}, '2026-09-14');
-    assert.equal(enriched[0].voucherCode, '-');
+    const enriched2 = enrichRecordsWithVouchers([permit], [undatedVoucher, nextWeekVoucher], {}, '2026-09-14');
+    assert.equal(enriched2[0].voucherCode, '-');
   });
 
 });

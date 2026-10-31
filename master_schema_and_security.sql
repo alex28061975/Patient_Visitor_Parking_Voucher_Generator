@@ -29,13 +29,19 @@ CREATE TABLE IF NOT EXISTS public.permits (
   phone TEXT,
   email TEXT,
   voucher_code TEXT,
+  replacement_code TEXT,
+  original_voucher_code TEXT,
+  pre_cancel_voucher_code TEXT,
   start_time TEXT,
   completion_time TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Ensure completion_time exists on pre-existing permits tables
+-- Ensure replacement and cancellation columns exist on pre-existing permits tables
 ALTER TABLE public.permits ADD COLUMN IF NOT EXISTS completion_time TEXT;
+ALTER TABLE public.permits ADD COLUMN IF NOT EXISTS replacement_code TEXT;
+ALTER TABLE public.permits ADD COLUMN IF NOT EXISTS original_voucher_code TEXT;
+ALTER TABLE public.permits ADD COLUMN IF NOT EXISTS pre_cancel_voucher_code TEXT;
 
 -- 1.2 Vouchers Table
 CREATE TABLE IF NOT EXISTS public.vouchers (
