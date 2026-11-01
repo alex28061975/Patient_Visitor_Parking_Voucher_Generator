@@ -432,7 +432,13 @@ export function enrichRecordsWithVouchers(
   recordsList.forEach((rec, idx) => {
     const recId = String(rec.formId || rec.id || idx);
     const recDateISO = getRequestedPermitDateISO(rec, fallbackDateStr);
-    const isCancelledRec = isRecordCancelled(rec, recDateISO || fallbackDateStr, recordsList) || isPermitExpiredBackdate(rec, recDateISO || fallbackDateStr) || rec.isCancelled === true || rec.status === 'CANCELLED';
+    const isCancelledRec = rec.isCancelled === true ||
+      String(rec.status || "").trim().toUpperCase() === "CANCELLED" ||
+      rec.voucherCode === "CANCELLED" ||
+      rec.prePaidCode === "CANCELLED" ||
+      rec.voucherCodesText === "CANCELLED" ||
+      isRecordCancelled(rec, recDateISO || fallbackDateStr, recordsList) ||
+      isPermitExpiredBackdate(rec, recDateISO || fallbackDateStr);
     const wasSent = rec.status === 'SENT' || rec.status === 'sent' || rec.isDispatched === true || rec.emailSent === true || dispatchedKeys.includes(String(rec.formId || rec.id));
     const shouldReserveOriginal = !isCancelledRec || wasSent;
 
@@ -598,6 +604,7 @@ export function enrichRecordsWithVouchers(
                              ? ((keyWithDate ? customVouchersMap[keyWithDate] : undefined) || customVouchersMap[cleanVrm])
                              : undefined);
 
+    const recId = String(record.formId || record.id || index);
     const existingCode = record.voucherCode || record.prePaidCode || record.qrCode || record.serialNumber;
 
     // Fast O(1) check: Only accept customOverride if it exists in current vouchersDb and matches permit date
@@ -606,8 +613,8 @@ export function enrichRecordsWithVouchers(
       const matchingVoucherInDb = voucherByCleanCode.get(clean);
       const dateMatches = Boolean(reqIso && matchingVoucherInDb && isVoucherForPermitDateRange(matchingVoucherInDb, reqIso, reqIsoTo));
       const vrmMatches = !matchingVoucherInDb || isVoucherVrmCompatible(matchingVoucherInDb.vrm, cleanVrm);
-      if (matchingVoucherInDb && dateMatches && vrmMatches && clean && clean !== "-" && clean !== "CANCELLED" && !checkIsAssigned(clean, custAssignedSet)) {
-        registerCodeGlobally(clean, custAssignedSet);
+      if (matchingVoucherInDb && dateMatches && vrmMatches && clean && clean !== "-" && clean !== "CANCELLED" && !checkIsAssigned(clean, custAssignedSet, recId)) {
+        registerCodeGlobally(clean, recId, custAssignedSet);
         recordClaimedCodes.set(index, clean);
       }
     } else if (existingCode && String(existingCode) !== "-" && String(existingCode).toUpperCase() !== "CANCELLED") {
@@ -618,8 +625,8 @@ export function enrichRecordsWithVouchers(
       const dateMatches = Boolean(reqIso && matchingVoucherInDb && isVoucherForPermitDateRange(matchingVoucherInDb, reqIso, reqIsoTo));
       const vrmMatches = !matchingVoucherInDb || isVoucherVrmCompatible(matchingVoucherInDb.vrm, cleanVrm);
       
-      if (matchingVoucherInDb && dateMatches && vrmMatches && clean !== "-" && clean !== "CANCELLED" && !checkIsAssigned(clean, custAssignedSet)) {
-        registerCodeGlobally(clean, custAssignedSet);
+      if (matchingVoucherInDb && dateMatches && vrmMatches && clean !== "-" && clean !== "CANCELLED" && !checkIsAssigned(clean, custAssignedSet, recId)) {
+        registerCodeGlobally(clean, recId, custAssignedSet);
         recordClaimedCodes.set(index, clean);
       }
     }
@@ -648,7 +655,7 @@ export function enrichRecordsWithVouchers(
       return;
     }
 
-    if (isRecordCancelled(record, reqDateD || fallbackDateStr, recordsList) || isPermitExpiredBackdate(record, reqDateD || fallbackDateStr)) {
+    if (record.isCancelled === true || String(record.status || "").trim().toUpperCase() === "CANCELLED" || isRecordCancelled(record, reqDateD || fallbackDateStr, recordsList) || isPermitExpiredBackdate(record, reqDateD || fallbackDateStr)) {
       const isBackdate = isPermitExpiredBackdate(record, reqDateD || fallbackDateStr);
       const reqIso = normalizeDateToISO(record.dateRequired || record.validFrom || "");
       const isExpired7Days = Boolean(fallbackDateStr && reqIso && Math.floor((new Date(reqIso + "T00:00:00").getTime() - new Date(normalizeDateToISO(fallbackDateStr) + "T00:00:00").getTime()) / 86400000) <= -7);
@@ -691,6 +698,7 @@ export function enrichRecordsWithVouchers(
       return;
     }
 
+    const recId = String(record.formId || record.id || index);
     const customerKey = getCustomerKey(record);
     if (!assignedPerCustomer.has(customerKey)) {
       assignedPerCustomer.set(customerKey, new Set());
@@ -704,7 +712,7 @@ export function enrichRecordsWithVouchers(
     const eligibleVouchers = candidateList.filter(v => {
       if (!isVoucherAvailableStatus(v)) return false;
       const cleanCode = cleanVoucherCodeValue(v.code).toUpperCase();
-      if (!cleanCode || checkIsAssigned(cleanCode, custAssignedSet)) return false;
+      if (!cleanCode || checkIsAssigned(cleanCode, custAssignedSet, recId)) return false;
       return isVoucherExactPeriodEligible(v, reqDateD, reqDateToD);
     });
 
@@ -725,7 +733,7 @@ export function enrichRecordsWithVouchers(
 
     if (matchedVoucher && matchedVoucher.code) {
       const code = cleanVoucherCodeValue(matchedVoucher.code).toUpperCase();
-      registerCodeGlobally(code, custAssignedSet);
+      registerCodeGlobally(code, recId, custAssignedSet);
       enrichedByIndex.set(index, {
         ...record,
         voucherCode: code,
@@ -2711,6 +2719,26 @@ export default function App() {
     databaseRef.current = reconciled;
     setTotalRecordsCount(prev => Math.max(prev, reconciled.length));
 
+    const oldCode = previousRecord?.originalVoucherCode || previousRecord?.voucherCode || previousRecord?.prePaidCode || "";
+    const newCode = updatedRecord.replacementCode || updatedRecord.voucherCode || "";
+    const oldRep = previousRecord?.replacementCode || "";
+    const codesToMarkUsed = [oldCode, newCode, oldRep].filter(c => c && c !== "-" && c !== "CANCELLED");
+    if (codesToMarkUsed.length > 0) {
+      setVouchersDatabase(prev => {
+        const next = prev.map(v => {
+          if (!v || !v.code) return v;
+          const clean = cleanVoucherCodeValue(v.code).toUpperCase();
+          if (codesToMarkUsed.some(c => clean === cleanVoucherCodeValue(c).toUpperCase() || v.code.toUpperCase() === c.toUpperCase())) {
+            return { ...v, isUsed: true, status: "used" };
+          }
+          return v;
+        });
+        vouchersDatabaseRef.current = next;
+        safeLocalStorage.setItem("concessions_vouchers_db", JSON.stringify(next));
+        return next;
+      });
+    }
+
     safeLocalStorage.setItem("concessions_permit_db", JSON.stringify(reconciled));
     const nowTimestamp = Date.now();
     safeLocalStorage.setItem("concessions_permit_db_last_modified", String(nowTimestamp));
@@ -2879,11 +2907,8 @@ export default function App() {
         String(item?.status || "").trim().toUpperCase() === "CANCELLED";
 
       // Preserve any existing valid voucher code so an Excel upload does not wipe it out
-      const preservedVoucher = (existing?.originalVoucherCode && existing.originalVoucherCode !== "CANCELLED" && existing.originalVoucherCode !== "-")
-        ? existing.originalVoucherCode
-        : (existing?.voucherCode && existing.voucherCode !== "CANCELLED" && existing.voucherCode !== "-")
-          ? existing.voucherCode
-          : undefined;
+      const preservedVoucher = existing ? getPreservedVoucher(existing) : undefined;
+      const originalVoucherCode = existing?.originalVoucherCode || preservedVoucher;
 
       if (!existing) {
         mergedByKey.set(key, { ...item });
@@ -2904,7 +2929,7 @@ export default function App() {
             isCancelled: true,
             status: existing.status || "CANCELLED",
             voucherCode: existing.voucherCode || "CANCELLED",
-            originalVoucherCode: preservedVoucher || existing.originalVoucherCode,
+            originalVoucherCode,
             cancellationReason: existing.cancellationReason
           });
         } else {
@@ -2914,7 +2939,7 @@ export default function App() {
             ...existing,
             ...item,
             voucherCode: preservedVoucher || item.voucherCode,
-            originalVoucherCode: preservedVoucher || existing.originalVoucherCode,
+            originalVoucherCode,
             status: "ACTIVE",
             isCancelled: false,
             cancellationReason: undefined
@@ -2926,7 +2951,7 @@ export default function App() {
           ...item,
           ...existing,
           voucherCode: preservedVoucher || existing.voucherCode || item.voucherCode,
-          originalVoucherCode: preservedVoucher || existing.originalVoucherCode,
+          originalVoucherCode,
         });
       }
     });
@@ -3212,7 +3237,25 @@ export default function App() {
     });
 
     // 4. Update the record in database: assign newVoucherCode, clear replacement flags, mark SENT
-    const originalCode = record.voucherCode || record.prePaidCode || record.originalVoucherCode;
+    const originalCode = record.originalVoucherCode || record.voucherCode || record.prePaidCode;
+    const oldCode = originalCode || "";
+    const codesToMark = [oldCode, newVoucherCode].filter(c => c && c !== "-" && c !== "CANCELLED");
+    if (codesToMark.length > 0) {
+      setVouchersDatabase(prev => {
+        const next = prev.map(v => {
+          if (!v || !v.code) return v;
+          const clean = cleanVoucherCodeValue(v.code).toUpperCase();
+          if (codesToMark.some(c => clean === cleanVoucherCodeValue(c).toUpperCase() || v.code.toUpperCase() === c.toUpperCase())) {
+            return { ...v, isUsed: true, status: "used" };
+          }
+          return v;
+        });
+        vouchersDatabaseRef.current = next;
+        safeLocalStorage.setItem("concessions_vouchers_db", JSON.stringify(next));
+        return next;
+      });
+    }
+
     const updatedRecord: CsvPermitRecord = {
       ...record,
       voucherCode: newVoucherCode,

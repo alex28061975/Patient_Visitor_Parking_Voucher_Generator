@@ -1929,6 +1929,123 @@ CON_ERR_2,,`;
     assert.equal(enriched2[0].voucherCode, '-');
   });
 
+  it('TEST 35: Follow-up replacement and code reservation robustness', async () => {
+    const { enrichRecordsWithVouchers, getPreservedVoucher } = await import('../App');
+
+    // 1. Record with voucherCode === originalVoucherCode keeps its code
+    const recSame: CsvPermitRecord = {
+      id: '1',
+      formId: '101',
+      vrm: 'AB12XYZ',
+      dateRequired: '2026-10-01',
+      dateExpiry: '2026-10-07',
+      voucherCode: 'VCH_SAME',
+      originalVoucherCode: 'VCH_SAME',
+      status: 'SENT'
+    };
+    const dbVouchers: ParsedVoucherData[] = [
+      { code: 'VCH_SAME', validFrom: '2026-10-01', validTo: '2026-10-07', status: 'available', isUsed: false }
+    ];
+    const res1 = enrichRecordsWithVouchers([recSame], dbVouchers, {}, '2026-10-01');
+    assert.equal(res1[0].voucherCode, 'VCH_SAME');
+
+    // 2. Replaced record (NEW1, original OLD1) + second permit in same week gets neither
+    const replacedRec: CsvPermitRecord = {
+      id: '2',
+      formId: '102',
+      vrm: 'CD34UVW',
+      dateRequired: '2026-10-01',
+      dateExpiry: '2026-10-07',
+      voucherCode: 'NEW1',
+      originalVoucherCode: 'OLD1',
+      status: 'SENT'
+    };
+    const secondRec: CsvPermitRecord = {
+      id: '3',
+      formId: '103',
+      vrm: 'EF56RST',
+      dateRequired: '2026-10-01',
+      dateExpiry: '2026-10-07',
+      voucherCode: '',
+      status: 'PENDING'
+    };
+    const dbVouchers2: ParsedVoucherData[] = [
+      { code: 'OLD1', validFrom: '2026-10-01', validTo: '2026-10-07', status: 'available', isUsed: false },
+      { code: 'NEW1', validFrom: '2026-10-01', validTo: '2026-10-07', status: 'available', isUsed: false },
+      { code: 'OTHER', validFrom: '2026-10-01', validTo: '2026-10-07', status: 'available', isUsed: false }
+    ];
+    const res2 = enrichRecordsWithVouchers([replacedRec, secondRec], dbVouchers2, {}, '2026-10-01');
+    assert.equal(res2[0].voucherCode, 'NEW1');
+    assert.equal(res2[1].voucherCode, 'OTHER'); // second permit gets OTHER, not OLD1 nor NEW1
+
+    // 3. Cancelled never-sent permit's code becomes available
+    const cancelledUnsent: CsvPermitRecord = {
+      id: '4',
+      formId: '104',
+      vrm: 'GH78KLM',
+      dateRequired: '2026-10-01',
+      dateExpiry: '2026-10-07',
+      originalVoucherCode: 'UNSENT_CODE',
+      status: 'CANCELLED',
+      isCancelled: true
+    };
+    const newPermitForUnsent: CsvPermitRecord = {
+      id: '5',
+      formId: '105',
+      vrm: 'JK90NOP',
+      dateRequired: '2026-10-01',
+      dateExpiry: '2026-10-07',
+      voucherCode: '',
+      status: 'PENDING'
+    };
+    const dbVouchers3: ParsedVoucherData[] = normalizeVouchersList([
+      { code: 'UNSENT_CODE', validFrom: '2026-10-01', validTo: '2026-10-07', status: 'available', isUsed: false }
+    ]);
+    const res3 = enrichRecordsWithVouchers([cancelledUnsent, newPermitForUnsent], dbVouchers3, {}, '2026-10-01');
+    assert.equal(res3[1].voucherCode, 'UNSENT_CODE'); // code returned to pool
+
+    // 4. Cancel a replaced record -> preserved brings back current code
+    const replacedCancelled: CsvPermitRecord = {
+      id: '6',
+      formId: '106',
+      vrm: 'XYZ123',
+      dateRequired: '2026-10-01',
+      dateExpiry: '2026-10-07',
+      voucherCode: 'NEW2',
+      originalVoucherCode: 'OLD2',
+      status: 'SENT'
+    };
+    const preserved = getPreservedVoucher(replacedCancelled);
+    assert.equal(preserved, 'NEW2');
+
+    // 5. Second replacement keeps the first originalVoucherCode
+    const firstRep: CsvPermitRecord = {
+      id: '7',
+      formId: '107',
+      vrm: 'REP111',
+      dateRequired: '2026-10-01',
+      dateExpiry: '2026-10-07',
+      voucherCode: 'CODE_ORIG',
+      originalVoucherCode: 'CODE_ORIG'
+    };
+    const secondRepUpdated: CsvPermitRecord = {
+      ...firstRep,
+      voucherCode: 'CODE_NEW2',
+      originalVoucherCode: firstRep.originalVoucherCode || 'CODE_ORIG'
+    };
+    assert.equal(secondRepUpdated.originalVoucherCode, 'CODE_ORIG');
+
+    // 6. Excel-merge getPreservedVoucher prefers current code over originalVoucherCode
+    const mixedRec: CsvPermitRecord = {
+      id: '8',
+      formId: '108',
+      vrm: 'MIX999',
+      voucherCode: 'CUR_CODE',
+      originalVoucherCode: 'ORIG_CODE'
+    };
+    assert.equal(getPreservedVoucher(mixedRec), 'CUR_CODE');
+  });
+
 });
 
 
