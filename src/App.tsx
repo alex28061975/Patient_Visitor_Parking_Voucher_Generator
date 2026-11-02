@@ -1063,7 +1063,8 @@ export default function App() {
 
   const [isSyncing, setIsSyncing] = useState(false);
   const [showBlocklist, setShowBlocklist] = useState<boolean>(false);
-  const [syncToast, setSyncToast] = useState<{ message: string; type: "success" | "info" | "warning" | "error" } | null>(null);
+  const [syncToast, setSyncToast] = useState<{ message: string; type: "success" | "info" | "warning" | "error"; actionLabel?: string; onAction?: () => void } | null>(null);
+  const [stalePermitsModalData, setStalePermitsModalData] = useState<Array<{ id: string; vrm: string; code: string; date: string }> | null>(null);
   const [editingRecord, setEditingRecord] = useState<CsvPermitRecord | null>(null);
   const [editingResolvedVoucherCode, setEditingResolvedVoucherCode] = useState<string>("");
   const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
@@ -1079,11 +1080,11 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isPreviewCardOpen]);
 
-  const showToast = useCallback((message: string, type: "success" | "info" | "warning" | "error" = "success") => {
-    setSyncToast({ message, type });
+  const showToast = useCallback((message: string, type: "success" | "info" | "warning" | "error" = "success", actionLabel?: string, onAction?: () => void) => {
+    setSyncToast({ message, type, actionLabel, onAction });
     setTimeout(() => {
       setSyncToast(prev => prev?.message === message ? null : prev);
-    }, 4500);
+    }, 6000);
   }, []);
 
   const databaseRef = useRef<CsvPermitRecord[]>(database);
@@ -3008,12 +3009,20 @@ export default function App() {
 
   const handleVouchersDatabaseChange = useCallback(async (incomingVouchers: ParsedVoucherData[]) => {
     clearDuplicateCheckCache();
-    // ⭐ FIX: Clear any customVouchers entries whose codes no longer exist in incoming vouchers
-    const validCodes = new Set(
-      (incomingVouchers || [])
-        .filter(v => v && v.code)
-        .map(v => cleanVoucherCodeValue(v.code).toUpperCase())
-    );
+    // 1. Collect incoming validFrom dates and incoming codes
+    const incomingValidFroms = new Set<string>();
+    const incomingCodes = new Set<string>();
+    (incomingVouchers || []).forEach(v => {
+      if (!v || !v.code) return;
+      const clean = cleanVoucherCodeValue(v.code).toUpperCase();
+      if (clean && clean !== "-") {
+        incomingCodes.add(clean);
+      }
+      const vf = getVoucherValidFromISO(v) || parseDateToISO(v.validFrom || v.valid_from || "");
+      if (vf) incomingValidFroms.add(vf);
+    });
+
+    const validCodes = incomingCodes;
 
     const currentCustom = customVouchersRef.current || {};
     const cleanedCustomVouchers: Record<string, string> = {};
@@ -3035,6 +3044,7 @@ export default function App() {
     const mergedMap = new Map<string, ParsedVoucherData>();
     const todayISO = getTodayISO();
 
+    // Populate mergedMap from existing database
     (vouchersDatabaseRef.current || []).forEach(v => {
       if (!v.code) return;
       const cleanKey = cleanVoucherCodeValue(v.code).toUpperCase();
@@ -3043,6 +3053,58 @@ export default function App() {
       }
     });
 
+    // Helper to check if a voucher code is assigned to any permit
+    const isCodeAssignedToAnyPermit = (codeUpper: string): boolean => {
+      const records = databaseRef.current || [];
+      return records.some(r => {
+        const codes = [r.voucherCode, r.replacementCode, r.originalVoucherCode, r.preCancelVoucherCode, r.prePaidCode];
+        return codes.some(c => c && cleanVoucherCodeValue(c).toUpperCase() === codeUpper);
+      });
+    };
+
+    let withdrawnCount = 0;
+    const stalePermitsList: Array<{ id: string; vrm: string; code: string; date: string }> = [];
+    const seenStalePermitKeys = new Set<string>();
+
+    // Reconcile existing vouchers whose validFrom is in incomingValidFroms but code is NOT in incomingCodes
+    for (const [cleanKey, existingV] of mergedMap.entries()) {
+      const existingVf = getVoucherValidFromISO(existingV) || parseDateToISO(existingV.validFrom || existingV.valid_from || "");
+      if (existingVf && incomingValidFroms.has(existingVf)) {
+        if (!incomingCodes.has(cleanKey)) {
+          // Missing from incoming file for this validFrom week
+          const assigned = isCodeAssignedToAnyPermit(cleanKey);
+          if (!assigned) {
+            // Withdraw
+            mergedMap.set(cleanKey, {
+              ...existingV,
+              status: "withdrawn",
+              isUsed: true
+            });
+            withdrawnCount++;
+          } else {
+            // Stale assigned
+            const matchingRecords = (databaseRef.current || []).filter(r => {
+              const codes = [r.voucherCode, r.replacementCode, r.originalVoucherCode, r.preCancelVoucherCode, r.prePaidCode];
+              return codes.some(c => c && cleanVoucherCodeValue(c).toUpperCase() === cleanKey);
+            });
+            matchingRecords.forEach(r => {
+              const pKey = String(r.formId || r.id || r.vrm);
+              if (!seenStalePermitKeys.has(pKey)) {
+                seenStalePermitKeys.add(pKey);
+                stalePermitsList.push({
+                  id: String(r.formId || r.id || "-"),
+                  vrm: r.vrm || "-",
+                  code: cleanKey,
+                  date: r.dateRequired || r.validFrom || "-"
+                });
+              }
+            });
+          }
+        }
+      }
+    }
+
+    // Process incoming vouchers (merging and un-withdrawing if present)
     (incomingVouchers || []).forEach(v => {
       if (!v.code) return;
       const cleanKey = cleanVoucherCodeValue(v.code).toUpperCase();
@@ -3054,6 +3116,8 @@ export default function App() {
           mergedMap.set(cleanKey, {
             ...existing,
             ...v,
+            status: v.status || "active",
+            isUsed: v.isUsed !== undefined ? v.isUsed : false,
             vrm: v.vrm || existing.vrm,
             validFrom: effectiveValidFrom,
             validTo: effectiveValidTo,
@@ -3064,6 +3128,8 @@ export default function App() {
         } else {
           mergedMap.set(cleanKey, {
             ...v,
+            status: v.status || "active",
+            isUsed: v.isUsed !== undefined ? v.isUsed : false,
             validFrom: effectiveValidFrom,
             validTo: effectiveValidTo,
             valid_from: effectiveValidFrom,
@@ -3082,11 +3148,19 @@ export default function App() {
     const nowTimestamp = Date.now();
     safeLocalStorage.setItem("concessions_vouchers_db_last_modified", String(nowTimestamp));
 
+    const staleCount = stalePermitsList.length;
+    const toastMsg = `${withdrawnCount} vouchers not in the latest export were withdrawn, ${staleCount} assigned permits hold codes missing from the export`;
+    if (staleCount > 0) {
+      showToast(toastMsg, "warning", "View permits", () => setStalePermitsModalData(stalePermitsList));
+    } else {
+      showToast(toastMsg, "success");
+    }
+
     if (storageModeRef.current === "cloud" && isSupabaseConfigured()) {
       await syncVouchersToSupabase(combinedVouchers, false);
       await refreshDatabase(undefined, true);
     }
-  }, [refreshDatabase]);
+  }, [refreshDatabase, showToast]);
 
   const handleResetVouchers = useCallback(async (): Promise<{ cleared: number; error: string | null }> => {
     console.log('CLEAR ALL VOUCHERS STARTED');
@@ -3376,6 +3450,69 @@ export default function App() {
         <div className={`park-toast ${syncToast.type}`}>
           {syncToast.type === "success" ? <CheckCircle2 /> : <AlertCircle />}
           <span>{syncToast.message}</span>
+          {syncToast.actionLabel && syncToast.onAction && (
+            <button 
+              type="button" 
+              onClick={syncToast.onAction}
+              className="ml-2 underline font-semibold text-white hover:text-blue-100 cursor-pointer"
+            >
+              {syncToast.actionLabel}
+            </button>
+          )}
+        </div>
+      )}
+
+      {stalePermitsModalData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white dark:bg-[#061424] border border-slate-200 dark:border-[#163657] rounded-2xl p-6 max-w-lg w-full mx-4 shadow-2xl text-slate-800 dark:text-slate-100">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-amber-500" />
+                <span>Assigned Permits Holding Missing Codes (Stale)</span>
+              </h3>
+              <button 
+                type="button" 
+                onClick={() => setStalePermitsModalData(null)}
+                className="text-slate-400 hover:text-slate-700 dark:hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
+              The following assigned permits hold voucher codes that are missing from the latest uploaded export file.
+            </p>
+            <div className="max-h-60 overflow-y-auto border border-slate-200 dark:border-[#163657] rounded-xl">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 dark:bg-[#081b30] text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-[#163657]">
+                  <tr>
+                    <th className="py-2.5 px-3">ID</th>
+                    <th className="py-2.5 px-3">VRM</th>
+                    <th className="py-2.5 px-3">Code</th>
+                    <th className="py-2.5 px-3">Date</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-[#102947]">
+                  {stalePermitsModalData.map((p, i) => (
+                    <tr key={`stale_${p.id}_${i}`} className="hover:bg-slate-50 dark:hover:bg-[#0c233d]/50">
+                      <td className="py-2 px-3 font-mono">{p.id}</td>
+                      <td className="py-2 px-3 font-mono font-bold">{p.vrm}</td>
+                      <td className="py-2 px-3 font-mono text-amber-600 dark:text-amber-400 font-bold">{p.code}</td>
+                      <td className="py-2 px-3 font-mono">{p.date}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setStalePermitsModalData(null)}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold shadow-sm cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

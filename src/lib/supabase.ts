@@ -573,6 +573,8 @@ export interface SupabaseVoucher {
   vrm?: string;
   valid_from?: string;
   valid_to?: string;
+  status?: string;
+  is_used?: boolean;
 }
 
 export const fetchVouchersFromSupabase = async (): Promise<ParsedVoucherData[] | null> => {
@@ -589,10 +591,19 @@ export const fetchVouchersFromSupabase = async (): Promise<ParsedVoucherData[] |
       const from = page * pageSize;
       const to = from + pageSize - 1;
 
-      const { data, error } = await client
+      let res: any = await client
         .from('vouchers')
-        .select('code, vrm, valid_from, valid_to')
+        .select('code, vrm, valid_from, valid_to, status, is_used')
         .range(from, to);
+
+      if (res.error && res.error.message && (res.error.message.includes('status') || res.error.message.includes('is_used') || res.error.message.includes('column'))) {
+        res = await client
+          .from('vouchers')
+          .select('code, vrm, valid_from, valid_to')
+          .range(from, to);
+      }
+
+      const { data, error } = res;
 
       if (error) {
         console.warn('Supabase fetch vouchers error:', error.message);
@@ -637,7 +648,9 @@ export const fetchVouchersFromSupabase = async (): Promise<ParsedVoucherData[] |
           code: cleanCode,
           vrm: item.vrm || undefined,
           validFrom: item.valid_from || undefined,
-          validTo: item.valid_to || undefined
+          validTo: item.valid_to || undefined,
+          status: item.status || "active",
+          isUsed: Boolean(item.is_used || item.status === "withdrawn" || item.status === "used")
         });
       }
     }
@@ -668,7 +681,7 @@ export const syncVouchersToSupabase = async (vouchers: ParsedVoucherData[], repl
       }
     }
 
-    const cleanPayloadMap = new Map<string, { code: string; vrm: string | null; valid_from: string | null; valid_to: string | null }>();
+    const cleanPayloadMap = new Map<string, { code: string; vrm: string | null; valid_from: string | null; valid_to: string | null; status: string; is_used: boolean }>();
     for (const v of vouchers) {
       if (!v.code) continue;
       const cleanCode = cleanVoucherCodeValue(v.code);
@@ -692,7 +705,9 @@ export const syncVouchersToSupabase = async (vouchers: ParsedVoucherData[], repl
           code: cleanCode,
           vrm: v.vrm || null,
           valid_from: v.validFrom || null,
-          valid_to: v.validTo || null
+          valid_to: v.validTo || null,
+          status: v.status || "active",
+          is_used: Boolean(v.isUsed || v.status === "withdrawn")
         });
       }
     }
@@ -702,9 +717,18 @@ export const syncVouchersToSupabase = async (vouchers: ParsedVoucherData[], repl
 
     const BATCH_SIZE = 400;
     let success = true;
+    let includeStatusCols = true;
+
     for (let i = 0; i < payload.length; i += BATCH_SIZE) {
       const chunk = payload.slice(i, i + BATCH_SIZE);
-      const { error } = await client.from('vouchers').upsert(chunk, { onConflict: 'code' });
+      let dataToUpsert = includeStatusCols ? chunk : chunk.map(c => ({ code: c.code, vrm: c.vrm, valid_from: c.valid_from, valid_to: c.valid_to }));
+      let { error } = await client.from('vouchers').upsert(dataToUpsert, { onConflict: 'code' });
+      if (error && includeStatusCols && (error.message.includes('status') || error.message.includes('is_used') || error.message.includes('column'))) {
+        includeStatusCols = false;
+        dataToUpsert = chunk.map(c => ({ code: c.code, vrm: c.vrm, valid_from: c.valid_from, valid_to: c.valid_to }));
+        const retryRes = await client.from('vouchers').upsert(dataToUpsert, { onConflict: 'code' });
+        error = retryRes.error;
+      }
       if (error) {
         console.warn(`Supabase sync vouchers error on batch starting at index ${i}:`, error.message);
         success = false;

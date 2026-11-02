@@ -2333,7 +2333,7 @@ export function isVoucherAvailableStatus(v: ParsedVoucherData | undefined | null
   const cleanCode = cleanVoucherCodeValue(v.code).toUpperCase();
   if (!cleanCode || cleanCode === "-" || cleanCode === "CANCELLED") return false;
   const status = String(v.status || "").toLowerCase();
-  if (v.isUsed === true || status === "used" || status === "assigned" || status === "sent" || status === "completed") {
+  if (v.isUsed === true || status === "used" || status === "assigned" || status === "sent" || status === "completed" || status === "withdrawn") {
     return false;
   }
   return true;
