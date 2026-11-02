@@ -1942,7 +1942,7 @@ CON_ERR_2,,`;
       voucherCode: 'VCH_SAME',
       originalVoucherCode: 'VCH_SAME',
       status: 'SENT'
-    };
+    } as CsvPermitRecord;
     const dbVouchers: ParsedVoucherData[] = [
       { code: 'VCH_SAME', validFrom: '2026-10-01', validTo: '2026-10-07', status: 'available', isUsed: false }
     ];
@@ -1959,7 +1959,7 @@ CON_ERR_2,,`;
       voucherCode: 'NEW1',
       originalVoucherCode: 'OLD1',
       status: 'SENT'
-    };
+    } as CsvPermitRecord;
     const secondRec: CsvPermitRecord = {
       id: '3',
       formId: '103',
@@ -1968,7 +1968,7 @@ CON_ERR_2,,`;
       dateExpiry: '2026-10-07',
       voucherCode: '',
       status: 'PENDING'
-    };
+    } as CsvPermitRecord;
     const dbVouchers2: ParsedVoucherData[] = [
       { code: 'OLD1', validFrom: '2026-10-01', validTo: '2026-10-07', status: 'available', isUsed: false },
       { code: 'NEW1', validFrom: '2026-10-01', validTo: '2026-10-07', status: 'available', isUsed: false },
@@ -1988,7 +1988,7 @@ CON_ERR_2,,`;
       originalVoucherCode: 'UNSENT_CODE',
       status: 'CANCELLED',
       isCancelled: true
-    };
+    } as CsvPermitRecord;
     const newPermitForUnsent: CsvPermitRecord = {
       id: '5',
       formId: '105',
@@ -1997,7 +1997,7 @@ CON_ERR_2,,`;
       dateExpiry: '2026-10-07',
       voucherCode: '',
       status: 'PENDING'
-    };
+    } as CsvPermitRecord;
     const dbVouchers3: ParsedVoucherData[] = normalizeVouchersList([
       { code: 'UNSENT_CODE', validFrom: '2026-10-01', validTo: '2026-10-07', status: 'available', isUsed: false }
     ]);
@@ -2014,7 +2014,7 @@ CON_ERR_2,,`;
       voucherCode: 'NEW2',
       originalVoucherCode: 'OLD2',
       status: 'SENT'
-    };
+    } as CsvPermitRecord;
     const preserved = getPreservedVoucher(replacedCancelled);
     assert.equal(preserved, 'NEW2');
 
@@ -2027,12 +2027,12 @@ CON_ERR_2,,`;
       dateExpiry: '2026-10-07',
       voucherCode: 'CODE_ORIG',
       originalVoucherCode: 'CODE_ORIG'
-    };
+    } as CsvPermitRecord;
     const secondRepUpdated: CsvPermitRecord = {
       ...firstRep,
       voucherCode: 'CODE_NEW2',
       originalVoucherCode: firstRep.originalVoucherCode || 'CODE_ORIG'
-    };
+    } as CsvPermitRecord;
     assert.equal(secondRepUpdated.originalVoucherCode, 'CODE_ORIG');
 
     // 6. Excel-merge getPreservedVoucher prefers current code over originalVoucherCode
@@ -2042,7 +2042,7 @@ CON_ERR_2,,`;
       vrm: 'MIX999',
       voucherCode: 'CUR_CODE',
       originalVoucherCode: 'ORIG_CODE'
-    };
+    } as CsvPermitRecord;
     assert.equal(getPreservedVoucher(mixedRec), 'CUR_CODE');
   });
 

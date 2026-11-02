@@ -228,6 +228,7 @@ export interface CsvPermitRecord {
   isCancelled?: boolean;
   isDispatched?: boolean;
   dispatchedAt?: string;
+  emailSent?: boolean;
   status?: string;
   todayDate?: string;
   processingDate?: string;

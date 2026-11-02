@@ -204,6 +204,7 @@ function oldEnrichRecordsWithVouchers(
     if (
       isVrmSilentBlockedSync(record.vrm) ||
       record.isCancelled === true ||
+      String(record.status || "").trim().toUpperCase() === "CANCELLED" ||
       isRecordCancelled(record, reqIso || fallbackDateStr, recordsList) ||
       isPermitExpiredBackdate(record, reqIso || fallbackDateStr)
     ) {
@@ -261,7 +262,7 @@ function oldEnrichRecordsWithVouchers(
       return;
     }
 
-    if (isRecordCancelled(record, reqDateD || fallbackDateStr, recordsList) || isPermitExpiredBackdate(record, reqDateD || fallbackDateStr)) {
+    if (record.isCancelled === true || String(record.status || "").trim().toUpperCase() === "CANCELLED" || isRecordCancelled(record, reqDateD || fallbackDateStr, recordsList) || isPermitExpiredBackdate(record, reqDateD || fallbackDateStr)) {
       const isBackdate = isPermitExpiredBackdate(record, reqDateD || fallbackDateStr);
       const reqIso = parseDateToISO(record.dateRequired || record.validFrom || "");
       const isExpired7Days = Boolean(fallbackDateStr && reqIso && Math.floor((new Date(reqIso + "T00:00:00").getTime() - new Date(parseDateToISO(fallbackDateStr) + "T00:00:00").getTime()) / 86400000) <= -7);
