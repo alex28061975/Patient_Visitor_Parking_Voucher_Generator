@@ -2235,7 +2235,7 @@ function DispatchCentreComponent({
                       ) : (
                         <span className="text-slate-800 dark:text-slate-200 font-normal inline-flex items-center gap-1.5 flex-wrap">
                           <span>{displayCode || "-"}</span>
-                          {vouchersDatabase && vouchersDatabase.length > 0 && displayCode && displayCode !== "-" && displayCode !== "CANCELLED" && displayCode !== "BLOCKED" && (!voucherIndex.codeMap.has(cleanUpperDisplay) || voucherIndex.codeMap.get(cleanUpperDisplay)?.some(v => String(v.status || "").toLowerCase() === "withdrawn")) && (
+                          {vouchersDatabase && vouchersDatabase.length > 0 && displayCode && displayCode !== "-" && displayCode !== "CANCELLED" && displayCode !== "BLOCKED" && (!voucherIndex.codeMap.has(cleanUpperDisplay) || voucherIndex.codeMap.get(cleanUpperDisplay)?.some(v => String(v.status || "").toLowerCase() === "withdrawn" || v.notInLatestExport === true)) && (
                             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" title="Code not in latest voucher export">
                               Code not in latest voucher export
                             </span>

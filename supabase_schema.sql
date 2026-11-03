@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS public.vouchers (
   vrm TEXT,
   valid_from TEXT,
   valid_to TEXT,
+  status TEXT DEFAULT 'active',
+  is_used BOOLEAN DEFAULT false,
+  not_in_latest_export BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

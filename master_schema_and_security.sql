@@ -49,8 +49,14 @@ CREATE TABLE IF NOT EXISTS public.vouchers (
   vrm TEXT,
   valid_from TEXT,
   valid_to TEXT,
+  status TEXT DEFAULT 'active',
+  is_used BOOLEAN DEFAULT false,
+  not_in_latest_export BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE public.vouchers ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
+ALTER TABLE public.vouchers ADD COLUMN IF NOT EXISTS is_used BOOLEAN DEFAULT false;
+ALTER TABLE public.vouchers ADD COLUMN IF NOT EXISTS not_in_latest_export BOOLEAN DEFAULT false;
 
 -- 1.3 Dispatched History Table
 CREATE TABLE IF NOT EXISTS public.dispatched_history (

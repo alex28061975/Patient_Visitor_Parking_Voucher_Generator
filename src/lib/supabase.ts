@@ -575,7 +575,22 @@ export interface SupabaseVoucher {
   valid_to?: string;
   status?: string;
   is_used?: boolean;
+  not_in_latest_export?: boolean;
 }
+
+let warnedMissingColumns = false;
+const showMissingColumnsWarningOnce = () => {
+  if (warnedMissingColumns) return;
+  warnedMissingColumns = true;
+  const msg = "Run add_voucher_status_columns.sql in Supabase so withdrawn vouchers persist";
+  if (typeof window !== 'undefined') {
+    if ((window as any).__showToast) {
+      (window as any).__showToast(msg, "warning");
+    } else {
+      window.dispatchEvent(new CustomEvent('app-toast', { detail: { message: msg, type: 'warning' } }));
+    }
+  }
+};
 
 export const fetchVouchersFromSupabase = async (): Promise<ParsedVoucherData[] | null> => {
   const client = getSupabaseClient();
@@ -593,14 +608,22 @@ export const fetchVouchersFromSupabase = async (): Promise<ParsedVoucherData[] |
 
       let res: any = await client
         .from('vouchers')
-        .select('code, vrm, valid_from, valid_to, status, is_used')
+        .select('code, vrm, valid_from, valid_to, status, is_used, not_in_latest_export')
         .range(from, to);
 
-      if (res.error && res.error.message && (res.error.message.includes('status') || res.error.message.includes('is_used') || res.error.message.includes('column'))) {
+      if (res.error && res.error.message && (res.error.message.includes('not_in_latest_export') || res.error.message.includes('status') || res.error.message.includes('is_used') || res.error.message.includes('column'))) {
+        showMissingColumnsWarningOnce();
         res = await client
           .from('vouchers')
-          .select('code, vrm, valid_from, valid_to')
+          .select('code, vrm, valid_from, valid_to, status, is_used')
           .range(from, to);
+
+        if (res.error && res.error.message && (res.error.message.includes('status') || res.error.message.includes('is_used') || res.error.message.includes('column'))) {
+          res = await client
+            .from('vouchers')
+            .select('code, vrm, valid_from, valid_to')
+            .range(from, to);
+        }
       }
 
       const { data, error } = res;
@@ -650,7 +673,8 @@ export const fetchVouchersFromSupabase = async (): Promise<ParsedVoucherData[] |
           validFrom: item.valid_from || undefined,
           validTo: item.valid_to || undefined,
           status: item.status || "active",
-          isUsed: Boolean(item.is_used || item.status === "withdrawn" || item.status === "used")
+          isUsed: Boolean(item.is_used || item.status === "withdrawn" || item.status === "used"),
+          notInLatestExport: Boolean(item.not_in_latest_export)
         });
       }
     }
@@ -681,7 +705,7 @@ export const syncVouchersToSupabase = async (vouchers: ParsedVoucherData[], repl
       }
     }
 
-    const cleanPayloadMap = new Map<string, { code: string; vrm: string | null; valid_from: string | null; valid_to: string | null; status: string; is_used: boolean }>();
+    const cleanPayloadMap = new Map<string, { code: string; vrm: string | null; valid_from: string | null; valid_to: string | null; status: string; is_used: boolean; not_in_latest_export: boolean }>();
     for (const v of vouchers) {
       if (!v.code) continue;
       const cleanCode = cleanVoucherCodeValue(v.code);
@@ -707,7 +731,8 @@ export const syncVouchersToSupabase = async (vouchers: ParsedVoucherData[], repl
           valid_from: v.validFrom || null,
           valid_to: v.validTo || null,
           status: v.status || "active",
-          is_used: Boolean(v.isUsed || v.status === "withdrawn")
+          is_used: Boolean(v.isUsed || v.status === "withdrawn"),
+          not_in_latest_export: Boolean(v.notInLatestExport)
         });
       }
     }
@@ -717,17 +742,33 @@ export const syncVouchersToSupabase = async (vouchers: ParsedVoucherData[], repl
 
     const BATCH_SIZE = 400;
     let success = true;
-    let includeStatusCols = true;
+    let includeAllCols = 2; // 2: full, 1: status/is_used only, 0: base only
 
     for (let i = 0; i < payload.length; i += BATCH_SIZE) {
       const chunk = payload.slice(i, i + BATCH_SIZE);
-      let dataToUpsert = includeStatusCols ? chunk : chunk.map(c => ({ code: c.code, vrm: c.vrm, valid_from: c.valid_from, valid_to: c.valid_to }));
+      let dataToUpsert = includeAllCols === 2 
+        ? chunk 
+        : includeAllCols === 1 
+          ? chunk.map(c => ({ code: c.code, vrm: c.vrm, valid_from: c.valid_from, valid_to: c.valid_to, status: c.status, is_used: c.is_used })) 
+          : chunk.map(c => ({ code: c.code, vrm: c.vrm, valid_from: c.valid_from, valid_to: c.valid_to }));
+      
       let { error } = await client.from('vouchers').upsert(dataToUpsert, { onConflict: 'code' });
-      if (error && includeStatusCols && (error.message.includes('status') || error.message.includes('is_used') || error.message.includes('column'))) {
-        includeStatusCols = false;
-        dataToUpsert = chunk.map(c => ({ code: c.code, vrm: c.vrm, valid_from: c.valid_from, valid_to: c.valid_to }));
+      if (error && (error.message.includes('not_in_latest_export') || error.message.includes('status') || error.message.includes('is_used') || error.message.includes('column'))) {
+        showMissingColumnsWarningOnce();
+        if (includeAllCols === 2) includeAllCols = 1;
+        else includeAllCols = 0;
+
+        dataToUpsert = includeAllCols === 1 
+          ? chunk.map(c => ({ code: c.code, vrm: c.vrm, valid_from: c.valid_from, valid_to: c.valid_to, status: c.status, is_used: c.is_used })) 
+          : chunk.map(c => ({ code: c.code, vrm: c.vrm, valid_from: c.valid_from, valid_to: c.valid_to }));
+        
         const retryRes = await client.from('vouchers').upsert(dataToUpsert, { onConflict: 'code' });
         error = retryRes.error;
+        if (error && includeAllCols === 1) {
+          includeAllCols = 0;
+          const baseRes = await client.from('vouchers').upsert(chunk.map(c => ({ code: c.code, vrm: c.vrm, valid_from: c.valid_from, valid_to: c.valid_to })), { onConflict: 'code' });
+          error = baseRes.error;
+        }
       }
       if (error) {
         console.warn(`Supabase sync vouchers error on batch starting at index ${i}:`, error.message);

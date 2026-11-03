@@ -28,6 +28,7 @@ import { isVrmSilentBlockedSync } from "./lib/blocklist";
 import { CsvPermitRecord, parsePermitCsv, parseDateToISO, addDays, formatPhoneNumber, ParsedVoucherData, addDaysSafe, parseDateRange, getDatesInRange, cleanVoucherCodeValue, exportToExcel, isVoucherCodeMatch, sortRecordsByFormIdDesc, getMatchingPermits, isDateRequiredOutsideValidWindow, isPermitExpiredBackdate, getTodayISO, checkIsBlockedDuplicate, parseFullDateTimeMs, normalizeVouchersList, isRecordCancelled, getRequestedPermitDateISO, isVoucherExactPeriodEligible, isVoucherAvailableStatus, isVoucherVrmCompatible, clearDuplicateCheckCache, extractRecordSubmissionTimeMs, extractRecordNumericFormId, isPermitFuture } from "./utils/csvParser";
 // ⭐ FIX: Import canonical voucher validation helper
 import { isVoucherForPermitDateRange, validateManualVoucherChange, getVoucherValidFromISO, getVoucherValidToISO, normalizeDateToISO, addDaysISO } from "./utils/voucherValidation";
+import { reconcileVoucherUpload } from "./utils/voucherReconcile";
 import { CsvDatabasePanel, type CsvDatabasePanelHandle } from "./components/CsvDatabasePanel";
 import { BlocklistPanel } from "./components/BlocklistPanel";
 import { EditRecordModal } from "./components/EditRecordModal";
@@ -1086,6 +1087,20 @@ export default function App() {
       setSyncToast(prev => prev?.message === message ? null : prev);
     }, 6000);
   }, []);
+
+  useEffect(() => {
+    (window as any).__showToast = (msg: string, type: any = "warning") => showToast(msg, type);
+    const handleAppToast = (e: any) => {
+      if (e?.detail?.message) {
+        showToast(e.detail.message, e.detail.type || "warning");
+      }
+    };
+    window.addEventListener('app-toast', handleAppToast);
+    return () => {
+      delete (window as any).__showToast;
+      window.removeEventListener('app-toast', handleAppToast);
+    };
+  }, [showToast]);
 
   const databaseRef = useRef<CsvPermitRecord[]>(database);
   const vouchersDatabaseRef = useRef<ParsedVoucherData[]>(vouchersDatabase);
@@ -3009,8 +3024,6 @@ export default function App() {
 
   const handleVouchersDatabaseChange = useCallback(async (incomingVouchers: ParsedVoucherData[]) => {
     clearDuplicateCheckCache();
-    // 1. Collect incoming validFrom dates and incoming codes
-    const incomingValidFroms = new Set<string>();
     const incomingCodes = new Set<string>();
     (incomingVouchers || []).forEach(v => {
       if (!v || !v.code) return;
@@ -3018,12 +3031,9 @@ export default function App() {
       if (clean && clean !== "-") {
         incomingCodes.add(clean);
       }
-      const vf = getVoucherValidFromISO(v) || parseDateToISO(v.validFrom || v.valid_from || "");
-      if (vf) incomingValidFroms.add(vf);
     });
 
     const validCodes = incomingCodes;
-
     const currentCustom = customVouchersRef.current || {};
     const cleanedCustomVouchers: Record<string, string> = {};
     Object.entries(currentCustom).forEach(([key, raw]) => {
@@ -3041,123 +3051,31 @@ export default function App() {
       safeLocalStorage.setItem("concessions_custom_vouchers", JSON.stringify(cleanedCustomVouchers));
     }
 
-    const mergedMap = new Map<string, ParsedVoucherData>();
-    const todayISO = getTodayISO();
+    const { merged, withdrawnCount, stalePermits } = reconcileVoucherUpload(
+      vouchersDatabaseRef.current || [],
+      incomingVouchers || [],
+      databaseRef.current || []
+    );
 
-    // Populate mergedMap from existing database
-    (vouchersDatabaseRef.current || []).forEach(v => {
-      if (!v.code) return;
-      const cleanKey = cleanVoucherCodeValue(v.code).toUpperCase();
-      if (cleanKey && cleanKey !== "-") {
-        mergedMap.set(cleanKey, { ...v });
-      }
-    });
+    setVouchersDatabase(merged);
+    vouchersDatabaseRef.current = merged;
 
-    // Helper to check if a voucher code is assigned to any permit
-    const isCodeAssignedToAnyPermit = (codeUpper: string): boolean => {
-      const records = databaseRef.current || [];
-      return records.some(r => {
-        const codes = [r.voucherCode, r.replacementCode, r.originalVoucherCode, r.preCancelVoucherCode, r.prePaidCode];
-        return codes.some(c => c && cleanVoucherCodeValue(c).toUpperCase() === codeUpper);
-      });
-    };
-
-    let withdrawnCount = 0;
-    const stalePermitsList: Array<{ id: string; vrm: string; code: string; date: string }> = [];
-    const seenStalePermitKeys = new Set<string>();
-
-    // Reconcile existing vouchers whose validFrom is in incomingValidFroms but code is NOT in incomingCodes
-    for (const [cleanKey, existingV] of mergedMap.entries()) {
-      const existingVf = getVoucherValidFromISO(existingV) || parseDateToISO(existingV.validFrom || existingV.valid_from || "");
-      if (existingVf && incomingValidFroms.has(existingVf)) {
-        if (!incomingCodes.has(cleanKey)) {
-          // Missing from incoming file for this validFrom week
-          const assigned = isCodeAssignedToAnyPermit(cleanKey);
-          if (!assigned) {
-            // Withdraw
-            mergedMap.set(cleanKey, {
-              ...existingV,
-              status: "withdrawn",
-              isUsed: true
-            });
-            withdrawnCount++;
-          } else {
-            // Stale assigned
-            const matchingRecords = (databaseRef.current || []).filter(r => {
-              const codes = [r.voucherCode, r.replacementCode, r.originalVoucherCode, r.preCancelVoucherCode, r.prePaidCode];
-              return codes.some(c => c && cleanVoucherCodeValue(c).toUpperCase() === cleanKey);
-            });
-            matchingRecords.forEach(r => {
-              const pKey = String(r.formId || r.id || r.vrm);
-              if (!seenStalePermitKeys.has(pKey)) {
-                seenStalePermitKeys.add(pKey);
-                stalePermitsList.push({
-                  id: String(r.formId || r.id || "-"),
-                  vrm: r.vrm || "-",
-                  code: cleanKey,
-                  date: r.dateRequired || r.validFrom || "-"
-                });
-              }
-            });
-          }
-        }
-      }
-    }
-
-    // Process incoming vouchers (merging and un-withdrawing if present)
-    (incomingVouchers || []).forEach(v => {
-      if (!v.code) return;
-      const cleanKey = cleanVoucherCodeValue(v.code).toUpperCase();
-      if (cleanKey && cleanKey !== "-") {
-        const existing = mergedMap.get(cleanKey);
-        const effectiveValidFrom = v.validFrom || (existing ? existing.validFrom : undefined);
-        const effectiveValidTo = v.validTo || (existing ? existing.validTo : undefined) || (effectiveValidFrom ? addDaysSafe(effectiveValidFrom, 6) : undefined);
-        if (existing) {
-          mergedMap.set(cleanKey, {
-            ...existing,
-            ...v,
-            status: v.status || "active",
-            isUsed: v.isUsed !== undefined ? v.isUsed : false,
-            vrm: v.vrm || existing.vrm,
-            validFrom: effectiveValidFrom,
-            validTo: effectiveValidTo,
-            valid_from: effectiveValidFrom,
-            valid_to: effectiveValidTo,
-            uploadDate: v.uploadDate || existing.uploadDate || todayISO
-          });
-        } else {
-          mergedMap.set(cleanKey, {
-            ...v,
-            status: v.status || "active",
-            isUsed: v.isUsed !== undefined ? v.isUsed : false,
-            validFrom: effectiveValidFrom,
-            validTo: effectiveValidTo,
-            valid_from: effectiveValidFrom,
-            valid_to: effectiveValidTo,
-            uploadDate: v.uploadDate || todayISO
-          });
-        }
-      }
-    });
-
-    const combinedVouchers = Array.from(mergedMap.values());
-    setVouchersDatabase(combinedVouchers);
-    vouchersDatabaseRef.current = combinedVouchers;
-
-    safeLocalStorage.setItem("concessions_vouchers_db", JSON.stringify(combinedVouchers));
+    safeLocalStorage.setItem("concessions_vouchers_db", JSON.stringify(merged));
     const nowTimestamp = Date.now();
     safeLocalStorage.setItem("concessions_vouchers_db_last_modified", String(nowTimestamp));
 
-    const staleCount = stalePermitsList.length;
-    const toastMsg = `${withdrawnCount} vouchers not in the latest export were withdrawn, ${staleCount} assigned permits hold codes missing from the export`;
-    if (staleCount > 0) {
-      showToast(toastMsg, "warning", "View permits", () => setStalePermitsModalData(stalePermitsList));
-    } else {
-      showToast(toastMsg, "success");
+    if (withdrawnCount > 0 || stalePermits.length > 0) {
+      const staleCount = stalePermits.length;
+      const toastMsg = `${withdrawnCount} vouchers not in the latest export were withdrawn, ${staleCount} assigned permits hold codes missing from the export`;
+      if (staleCount > 0) {
+        showToast(toastMsg, "warning", "View permits", () => setStalePermitsModalData(stalePermits));
+      } else {
+        showToast(toastMsg, "success");
+      }
     }
 
     if (storageModeRef.current === "cloud" && isSupabaseConfigured()) {
-      await syncVouchersToSupabase(combinedVouchers, false);
+      await syncVouchersToSupabase(merged, false);
       await refreshDatabase(undefined, true);
     }
   }, [refreshDatabase, showToast]);

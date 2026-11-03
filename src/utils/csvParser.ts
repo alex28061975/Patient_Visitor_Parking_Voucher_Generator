@@ -1895,6 +1895,7 @@ export interface ParsedVoucherData {
   code: string;
   status?: string;
   isUsed?: boolean;
+  notInLatestExport?: boolean;
   validFrom?: string;
   validTo?: string;
   valid_from?: string;
