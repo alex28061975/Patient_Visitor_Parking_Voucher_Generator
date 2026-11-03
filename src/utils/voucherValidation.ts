@@ -1,4 +1,5 @@
 import type { ParsedVoucherData, CsvPermitRecord } from "./csvParser";
+import { parseDateRange } from "./csvParser";
 import { checkIsRecordDispatched } from "./dispatchUtils";
 
 export function cleanVoucherCodeValue(val: any): string {
@@ -92,6 +93,38 @@ export function addDaysISO(isoDate: string, days: number): string {
   const mm = String(date.getMonth() + 1).padStart(2, "0");
   const dd = String(date.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
+}
+
+/**
+ * Returns the exact voucher window { fromISO, toISO } for a permit record.
+ * fromISO = normalized date of (record.dateRequired || record.validFrom), taking the START if it is a range string.
+ * toISO = normalized (record.validTo || record.dateExpiry), otherwise fromISO + 6 days.
+ */
+export function getPermitVoucherWindow(record: CsvPermitRecord | undefined | null): { fromISO: string; toISO: string } {
+  if (!record) {
+    const today = normalizeDateToISO(new Date().toISOString());
+    return { fromISO: today, toISO: addDaysISO(today, 6) };
+  }
+  const rawFrom = record.dateRequired || record.validFrom || "";
+  const range = parseDateRange(String(rawFrom));
+  let fromISO = range ? range.startISO : normalizeDateToISO(String(rawFrom));
+  if (!fromISO) {
+    fromISO = normalizeDateToISO(record.validFrom || record.dateRequired || "");
+  }
+  if (!fromISO) {
+    fromISO = normalizeDateToISO(new Date().toISOString());
+  }
+
+  const rawTo = record.validTo || record.dateExpiry || "";
+  let toISO = normalizeDateToISO(String(rawTo));
+  if (!toISO && range && range.endISO) {
+    toISO = range.endISO;
+  }
+  if (!toISO) {
+    toISO = addDaysISO(fromISO, 6);
+  }
+
+  return { fromISO, toISO };
 }
 
 /**

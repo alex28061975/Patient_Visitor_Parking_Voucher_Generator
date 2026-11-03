@@ -71,7 +71,9 @@ import {
   addDaysISO,
   computeVoucherBatchExpiryBadge,
   getSelectableActiveDateCodes,
-  buildAssignedCodeSet
+  buildAssignedCodeSet,
+  getPermitVoucherWindow,
+  formatDateUK
 } from "../utils/voucherValidation";
 
 // ⭐ FIX: Re-export helper functions so other files importing from DispatchCentre don't break
@@ -600,54 +602,13 @@ function DispatchCentreComponent({
     return database?.[0] || null;
   }, [selectedRowRecord, formData, database, dispatchedKeysSet, unsentKeysSet]);
 
-  // Current permit exact validFrom and validTo ISO matching for the selected row
-  const currentPermitValidFromIso = useMemo(() => {
-    if (activeRecord) {
-      const from = getRequestedPermitDateISO(activeRecord) || parseDateToISO(activeRecord.validFrom || activeRecord.dateRequired);
-      if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) return from;
-    }
-    if (formData?.validFrom) {
-      const iso = parseDateToISO(String(formData.validFrom));
-      if (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
-    }
-    if (formData?.dateRequired) {
-      const iso = getRequestedPermitDateISO(formData);
-      if (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
-    }
-    if (formData?.todayDate) {
-      const iso = parseDateToISO(String(formData.todayDate));
-      if (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
-    }
-    return getTodayISO();
-  }, [activeRecord, formData?.validFrom, formData?.dateRequired, formData?.todayDate]);
+  // Current permit exact validFrom and validTo ISO matching for the selected row using getPermitVoucherWindow
+  const voucherWindow = useMemo(() => {
+    return getPermitVoucherWindow(activeRecord);
+  }, [activeRecord]);
 
-  const currentPermitValidToIso = useMemo(() => {
-    if (activeRecord) {
-      if (activeRecord.validTo) {
-        const iso = parseDateToISO(String(activeRecord.validTo));
-        if (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
-      }
-      if (activeRecord.dateExpiry) {
-        const iso = parseDateToISO(String(activeRecord.dateExpiry));
-        if (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
-      }
-      const rawDate = activeRecord.dateRequired || activeRecord.validFrom;
-      if (rawDate) {
-        const range = parseDateRange(String(rawDate));
-        if (range && range.endISO && /^\d{4}-\d{2}-\d{2}$/.test(range.endISO)) {
-          return range.endISO;
-        }
-      }
-    }
-    if (formData?.validTo) {
-      const iso = parseDateToISO(String(formData.validTo));
-      if (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
-    }
-    if (currentPermitValidFromIso) {
-      return addDays(currentPermitValidFromIso, 6);
-    }
-    return "";
-  }, [activeRecord, formData?.validTo, currentPermitValidFromIso]);
+  const currentPermitValidFromIso = voucherWindow.fromISO;
+  const currentPermitValidToIso = voucherWindow.toISO;
 
   // ⭐ Pre-index vouchersDatabase by voucher code and validity period for O(1) lookups
   const voucherIndex = useMemo(() => {
@@ -1660,7 +1621,7 @@ function DispatchCentreComponent({
                   isRangeStockLow ? "text-[#b91c1c]" : "text-[#15803d]"
                 }`}
               >
-                Active Date Codes ({unusedVouchersForDay.length}):
+                Active Date Codes ({unusedVouchersForDay.length}) {formatDateUK(currentPermitValidFromIso)} - {formatDateUK(currentPermitValidToIso)}:
               </label>
               <select
                 value=""

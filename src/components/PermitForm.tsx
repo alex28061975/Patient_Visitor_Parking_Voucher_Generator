@@ -34,7 +34,7 @@ import {
   ChevronDown
 } from "lucide-react";
 import { isVrmSilentBlockedSync } from "../lib/blocklist";
-import { getSelectableActiveDateCodes, buildAssignedCodeSet } from "../utils/voucherValidation";
+import { getSelectableActiveDateCodes, buildAssignedCodeSet, getPermitVoucherWindow, formatDateUK } from "../utils/voucherValidation";
 
 // Helper to format string to Title Case (capitalize each word)
 function toTitleCase(str: string): string {
