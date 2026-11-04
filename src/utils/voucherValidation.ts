@@ -106,8 +106,11 @@ export function getPermitVoucherWindow(record: CsvPermitRecord | undefined | nul
     return { fromISO: today, toISO: addDaysISO(today, 6) };
   }
   const rawFrom = record.dateRequired || record.validFrom || "";
-  const range = parseDateRange(String(rawFrom));
-  let fromISO = range ? range.startISO : normalizeDateToISO(String(rawFrom));
+  const s = String(rawFrom).trim();
+  const range = parseDateRange(s);
+  const isRangeString = (range && range.startISO !== range.endISO) || /to|through|\s-\s/i.test(s);
+
+  let fromISO = range ? range.startISO : normalizeDateToISO(s);
   if (!fromISO) {
     fromISO = normalizeDateToISO(record.validFrom || record.dateRequired || "");
   }
@@ -117,7 +120,7 @@ export function getPermitVoucherWindow(record: CsvPermitRecord | undefined | nul
 
   const rawTo = record.validTo || record.dateExpiry || "";
   let toISO = normalizeDateToISO(String(rawTo));
-  if (!toISO && range && range.endISO) {
+  if (!toISO && isRangeString && range && range.endISO) {
     toISO = range.endISO;
   }
   if (!toISO) {

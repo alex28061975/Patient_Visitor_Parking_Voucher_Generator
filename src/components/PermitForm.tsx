@@ -88,27 +88,6 @@ export function PermitForm({
     return Array.from(set);
   }, [database]);
 
-  // Target ISO for the permit being viewed/edited
-  const targetIso = useMemo(() => {
-    // 1. Highest priority: The selected permit record's requested date
-    const permitIso = getRequestedPermitDateISO(data);
-    if (permitIso && /^\d{4}-\d{2}-\d{2}$/.test(permitIso)) {
-      return permitIso;
-    }
-    // 2. Fallback: form's todayDate / processing date
-    const processingIso = data.todayDate ? parseDateToISO(String(data.todayDate)) : "";
-    if (processingIso && /^\d{4}-\d{2}-\d{2}$/.test(processingIso)) {
-      return processingIso;
-    }
-    return getTodayISO();
-  }, [data.validFrom, data.dateRequired, data.startTime, data.createdAt, data.todayDate]);
-
-  // Matching permits for the active date
-  const matchingPermits = useMemo(() => {
-    if (!targetIso) return [];
-    return getMatchingPermits(database, targetIso);
-  }, [database, targetIso]);
-
   // The form only ever holds ONE mutable, shared editable state (`data`), which can
   // carry stale fields (e.g. dateRequired) left over from a previously-loaded record.
   // The Permit Table never has this problem because it reads each row's own record
@@ -124,6 +103,30 @@ export function PermitForm({
     return matched || data;
   }, [data, database]);
 
+  const hasDatabaseRecord = useMemo(() => {
+    if (!database || database.length === 0) return false;
+    const numId = extractRecordNumericFormId(data);
+    return database.some(
+      r => isSamePermitRecord(r, data) || (numId > 0 && extractRecordNumericFormId(r) === numId)
+    );
+  }, [data, database]);
+
+  const voucherWindow = useMemo(() => {
+    if (hasDatabaseRecord && canonicalRecord) {
+      return getPermitVoucherWindow(canonicalRecord);
+    }
+    return getPermitVoucherWindow(data as any);
+  }, [hasDatabaseRecord, canonicalRecord, data]);
+
+  const targetIso = voucherWindow.fromISO;
+  const targetExpiry = voucherWindow.toISO;
+
+  // Matching permits for the active date
+  const matchingPermits = useMemo(() => {
+    if (!targetIso) return [];
+    return getMatchingPermits(database, targetIso);
+  }, [database, targetIso]);
+
   // Precomputed assigned set for performance (keyed on database, dispatchedKeys, and canonicalRecord id)
   const assignedSetForPermit = useMemo(() => {
     return buildAssignedCodeSet(database, canonicalRecord, dispatchedKeys);
@@ -136,13 +139,13 @@ export function PermitForm({
       vouchersDatabase,
       database,
       permitDateRequired: targetIso,
-      permitDateExpiry: data.validTo || addDays(targetIso, 6),
+      permitDateExpiry: targetExpiry,
       currentRecord: canonicalRecord,
       extraExcludedCodes: [data.voucherCodesText, data.voucherCode, data.prePaidCode],
       precomputedAssignedSet: assignedSetForPermit,
       dispatchedKeys
     });
-  }, [vouchersDatabase, database, targetIso, data, canonicalRecord, assignedSetForPermit, dispatchedKeys]);
+  }, [vouchersDatabase, database, targetIso, targetExpiry, data, canonicalRecord, assignedSetForPermit, dispatchedKeys]);
 
   const hasValidVoucherCode = useMemo(() => {
     const code = cleanVoucherCodeValue(String(data.voucherCodesText || "")).toUpperCase();
@@ -446,7 +449,7 @@ export function PermitForm({
           <div className="flex flex-col gap-1 w-full">
             <div className="flex items-center gap-2 w-full">
               <label className="text-sm font-medium text-slate-700 dark:text-slate-200 whitespace-nowrap shrink-0">
-                Active Date Codes ({unusedVouchersForDay.length}):
+                Active Date Codes ({unusedVouchersForDay.length}) {formatDateUK(targetIso)} - {formatDateUK(targetExpiry)}:
               </label>
 
               <select
@@ -493,7 +496,13 @@ export function PermitForm({
                 }`}
               >
                 <option value="" disabled className="font-mono font-normal">
-                  {isReplacingCode ? "Replacing..." : "-- Choose Code --"}
+                  {vouchersDatabase.length === 0
+                    ? "-- No Vouchers Uploaded --"
+                    : unusedVouchersForDay.length === 0
+                      ? "-- 0 Available --"
+                      : isReplacingCode
+                        ? "Replacing..."
+                        : "-- Choose Code --"}
                 </option>
                 {unusedVouchersForDay.map((v, index) => (
                   <option

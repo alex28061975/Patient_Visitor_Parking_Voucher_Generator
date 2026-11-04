@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { reconcileVoucherUpload } from '../utils/voucherReconcile';
+import { getPermitVoucherWindow, getSelectableActiveDateCodes } from '../utils/voucherValidation';
 import {
   ParsedVoucherData,
   CsvPermitRecord,
@@ -196,6 +197,47 @@ describe('Voucher Upload Reconciliation & Withdrawal Test Suite (Scenarios A-G)'
     assert.equal(content.includes('import { reconcileVoucherUpload }'), true);
     assert.equal(content.includes('reconcileVoucherUpload('), true);
     assert.equal(content.includes('stalePermitsList'), false);
+  });
+
+  it('TEST I: getPermitVoucherWindow unit tests (a-d) and Vouchers.csv week isolation', () => {
+    // (a) {dateRequired:'01/11/2026', validTo:'2026-11-07'} gives 2026-11-01 to 2026-11-07
+    const w1 = getPermitVoucherWindow({ dateRequired: '01/11/2026', validTo: '2026-11-07' } as any);
+    assert.equal(w1.fromISO, '2026-11-01');
+    assert.equal(w1.toISO, '2026-11-07');
+
+    // (b) {dateRequired:'01/11/2026 to 07/11/2026'} gives 2026-11-01 to 2026-11-07
+    const w2 = getPermitVoucherWindow({ dateRequired: '01/11/2026 to 07/11/2026' } as any);
+    assert.equal(w2.fromISO, '2026-11-01');
+    assert.equal(w2.toISO, '2026-11-07');
+
+    // (c) no validTo gives from plus 6 days
+    const w3 = getPermitVoucherWindow({ dateRequired: '01/11/2026' } as any);
+    assert.equal(w3.fromISO, '2026-11-01');
+    assert.equal(w3.toISO, '2026-11-07');
+
+    // (d) a record with todayDate 2026-11-02 but dateRequired 01/11/2026 still gives 2026-11-01
+    const w4 = getPermitVoucherWindow({ todayDate: '2026-11-02', dateRequired: '01/11/2026' } as any);
+    assert.equal(w4.fromISO, '2026-11-01');
+    assert.equal(w4.toISO, '2026-11-07');
+
+    // Real structure of Vouchers.csv (30 vouchers per week): window 2026-11-01 to 2026-11-07 yields only the 01/11 batch codes (e.g. 1NJTIUGXSRJ17) and none of the 02/11 batch (e.g. OVYGRU0HIO0I1)
+    const vouchers: ParsedVoucherData[] = [];
+    for (let i = 1; i <= 30; i++) {
+      vouchers.push({ code: `V1_${i}`, validFrom: '2026-11-01', validTo: '2026-11-07', status: 'active', isUsed: false });
+    }
+    vouchers.push({ code: 'OVYGRU0HIO0I1', validFrom: '2026-11-02', validTo: '2026-11-08', status: 'active', isUsed: false });
+    vouchers[0].code = '1NJTIUGXSRJ17';
+
+    const selectable = getSelectableActiveDateCodes({
+      vouchersDatabase: vouchers,
+      database: [],
+      permitDateRequired: '2026-11-01',
+      permitDateExpiry: '2026-11-07',
+      currentRecord: { id: '1', dateRequired: '01/11/2026', validTo: '2026-11-07' } as any
+    });
+
+    assert.equal(selectable.some(v => v.code === '1NJTIUGXSRJ17'), true);
+    assert.equal(selectable.some(v => v.code === 'OVYGRU0HIO0I1'), false);
   });
 
 });
