@@ -3,7 +3,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { reconcileVoucherUpload } from '../utils/voucherReconcile';
-import { getPermitVoucherWindow, getSelectableActiveDateCodes } from '../utils/voucherValidation';
+import {
+  getPermitVoucherWindow,
+  getSelectableActiveDateCodes,
+  getVoucherInventorySummary,
+  getStockLevel,
+  getCoverLevel,
+  formatDateUK,
+  excludeRecordOwnCodes
+} from '../utils/voucherValidation';
 import {
   ParsedVoucherData,
   CsvPermitRecord,
@@ -238,6 +246,77 @@ describe('Voucher Upload Reconciliation & Withdrawal Test Suite (Scenarios A-G)'
 
     assert.equal(selectable.some(v => v.code === '1NJTIUGXSRJ17'), true);
     assert.equal(selectable.some(v => v.code === 'OVYGRU0HIO0I1'), false);
+  });
+
+  it('TEST J: getVoucherInventorySummary breakdown, totalInWindow, availableInWindow, withdrawn and expired isolation', () => {
+    const vouchers: ParsedVoucherData[] = [];
+    for (let i = 1; i <= 29; i++) {
+      vouchers.push({ code: `V_${i}`, validFrom: '2026-11-01', validTo: '2026-11-07', status: 'active', isUsed: false });
+    }
+    vouchers.push({ code: 'V_WITHDRAWN', validFrom: '2026-11-01', validTo: '2026-11-07', status: 'withdrawn', isUsed: true });
+    vouchers.push({ code: 'V_EXPIRED', validFrom: '2026-10-01', validTo: '2026-10-07', status: 'active', isUsed: false });
+
+    const assigned = new Set(['V_1', 'V_2', 'V_3', 'V_4', 'V_5']);
+    const summary = getVoucherInventorySummary(vouchers, assigned, '2026-11-01', '2026-11-07', '2026-11-04');
+
+    assert.equal(summary.totalInWindow, 30);
+    assert.equal(summary.availableInWindow, 24);
+    const sumBreakdown = summary.breakdown.available + summary.breakdown.used + summary.breakdown.withdrawn + summary.breakdown.expired;
+    assert.equal(sumBreakdown, vouchers.length);
+    assert.equal(summary.breakdown.withdrawn, 1);
+    assert.equal(summary.breakdown.expired, 1);
+  });
+
+  it('TEST K: getStockLevel and getCoverLevel unit tests', () => {
+    assert.equal(getStockLevel(17), 'green');
+    assert.equal(getStockLevel(10), 'amber');
+    assert.equal(getStockLevel(1), 'amber');
+    assert.equal(getStockLevel(0), 'red');
+
+    assert.equal(getCoverLevel(20), 'green');
+    assert.equal(getCoverLevel(7), 'amber');
+    assert.equal(getCoverLevel(4), 'amber');
+    assert.equal(getCoverLevel(3), 'red');
+    assert.equal(getCoverLevel(0), 'red');
+  });
+
+  it('TEST L: Window chip text formatting for fromISO 2026-11-02 / toISO 2026-11-08', () => {
+    const from = '2026-11-02';
+    const to = '2026-11-08';
+    const ukFrom = formatDateUK(from);
+    const ukTo = formatDateUK(to);
+    const shortFrom = ukFrom.substring(0, 5);
+    const shortTo = ukTo.substring(0, 5);
+    const text = `${shortFrom} – ${shortTo}`;
+    assert.equal(text, '02/11 – 08/11');
+  });
+
+  it('TEST M: excludeRecordOwnCodes and VoucherCodePicker source checks', () => {
+    const list: ParsedVoucherData[] = [
+      { code: 'AAA111', validFrom: '2026-11-01', validTo: '2026-11-07', status: 'active', isUsed: false },
+      { code: 'BBB222', validFrom: '2026-11-01', validTo: '2026-11-07', status: 'active', isUsed: false },
+      { code: 'CCC333', validFrom: '2026-11-01', validTo: '2026-11-07', status: 'active', isUsed: false }
+    ];
+
+    const res1 = excludeRecordOwnCodes(list, { voucherCode: 'AAA111' } as any);
+    assert.deepEqual(res1.map(v => v.code), ['BBB222', 'CCC333']);
+
+    const res2 = excludeRecordOwnCodes(list, {
+      voucherCode: 'BBB222',
+      originalVoucherCode: 'AAA111',
+      replacementCode: 'BBB222'
+    } as any);
+    assert.deepEqual(res2.map(v => v.code), ['CCC333']);
+
+    const res3 = excludeRecordOwnCodes(list, {} as any);
+    assert.deepEqual(res3.map(v => v.code), ['AAA111', 'BBB222', 'CCC333']);
+
+    const pickerPath = path.resolve(process.cwd(), 'src/components/VoucherCodePicker.tsx');
+    const pickerContent = fs.readFileSync(pickerPath, 'utf8');
+    assert.equal(pickerContent.includes('value={value}'), false);
+    assert.equal(pickerContent.includes('value: string'), false);
+    assert.equal(pickerContent.includes('Copy'), false);
+    assert.equal(pickerContent.includes('Check'), false);
   });
 
 });

@@ -62,6 +62,7 @@ import {
 } from "../utils/csvParser";
 import { checkIsRecordDispatched, isRecordMatch, isPlaceholderVrm, getRecordPrimaryKey } from "../utils/dispatchUtils";
 import { isVrmSilentBlockedSync } from "../lib/blocklist";
+import { VoucherCodePicker } from "./VoucherCodePicker";
 // ⭐ FIX: Import canonical date & voucher matching functions from voucherValidation
 import {
   isVoucherForPermitDateRange,
@@ -73,7 +74,11 @@ import {
   getSelectableActiveDateCodes,
   buildAssignedCodeSet,
   getPermitVoucherWindow,
-  formatDateUK
+  formatDateUK,
+  getVoucherInventorySummary,
+  getStockLevel,
+  getCoverLevel,
+  excludeRecordOwnCodes
 } from "../utils/voucherValidation";
 
 // ⭐ FIX: Re-export helper functions so other files importing from DispatchCentre don't break
@@ -691,6 +696,10 @@ function DispatchCentreComponent({
     activeRecord
   ]);
 
+  const filteredUnusedVouchers = useMemo(() => {
+    return excludeRecordOwnCodes(unusedVouchersForDay, activeRecord || selectedRowRecord);
+  }, [unusedVouchersForDay, activeRecord, selectedRowRecord]);
+
   // Exact range voucher stock metrics for Active Date Codes dropdown badge
   const totalForThisRange = useMemo(() => {
     if (!currentPermitValidFromIso || !vouchersDatabase || vouchersDatabase.length === 0) {
@@ -700,15 +709,21 @@ function DispatchCentreComponent({
     return voucherIndex.getVouchersForDateRange(currentPermitValidFromIso, validTo).length;
   }, [voucherIndex, vouchersDatabase, currentPermitValidFromIso, currentPermitValidToIso]);
 
-  const remainingForThisRange = unusedVouchersForDay.length;
+  const remainingForThisRange = filteredUnusedVouchers.length;
   const percentRemaining = totalForThisRange > 0
     ? (remainingForThisRange / totalForThisRange) * 100
     : 0;
   const isRangeStockLow = totalForThisRange === 0 || remainingForThisRange <= 5 || percentRemaining <= 5;
 
 
-  const handleActiveDateCodeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const selectedCode = cleanVoucherCodeValue(e.target.value).toUpperCase();
+  const voucherSummary = useMemo(() => {
+    const todayIso = new Date().toISOString().substring(0, 10);
+    const w = getPermitVoucherWindow(activeRecord);
+    return getVoucherInventorySummary(vouchersDatabase, assignedVoucherCodesSet, w.fromISO, w.toISO, todayIso);
+  }, [vouchersDatabase, assignedVoucherCodesSet, activeRecord]);
+
+  const handleActiveDateCodeSelect = useCallback((codeStr: string) => {
+    const selectedCode = cleanVoucherCodeValue(codeStr).toUpperCase();
     if (!selectedCode || selectedCode === "-" || selectedCode === "CANCELLED") {
       return;
     }
@@ -722,7 +737,6 @@ function DispatchCentreComponent({
       return;
     }
     setAssignmentError(null);
-
     setIsReplacingCode(true);
 
     const originalVoucherCode = currentRec?.originalVoucherCode || currentRec?.voucherCode || currentRec?.prePaidCode;
@@ -744,16 +758,18 @@ function DispatchCentreComponent({
       vrm: currentRec?.vrm,
       originalVoucherCode: originalVoucherCode || undefined,
       replacementCode: selectedCode,
-      voucherCodesText: selectedCode,
-      status: "Pending",
-      emailType: "RESEND_CONCESSION",
       isResend: true,
+      emailType: "RESEND_CONCESSION",
       emailTemplate: "replacement"
-    });
+    } as any);
 
     setTimeout(() => {
       setIsReplacingCode(false);
     }, 600);
+  }, [activeRecord, selectedRowRecord, database, onChangeFormData]);
+
+  const handleActiveDateCodeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    handleActiveDateCodeSelect(e.target.value);
   };
 
   // Sorting state
@@ -1575,7 +1591,7 @@ function DispatchCentreComponent({
     <section className="w-full bg-white dark:bg-[#030C1B] border border-slate-200 dark:border-[#0D223C] rounded-2xl p-4 md:p-6 shadow-2xl text-slate-700 dark:text-slate-200 transition-colors">
       {/* Top Header Section */}
       <div className="flex flex-col gap-3 pb-4 border-b border-slate-200 dark:border-[#0D223C]">
-        <div className="flex items-center justify-between gap-3 w-full flex-nowrap overflow-x-auto pb-0.5">
+        <div className="flex flex-wrap xl:flex-nowrap items-center justify-between gap-3 w-full pb-0.5">
           {/* Left: Logo & Title */}
           <div className="flex items-center gap-3 shrink-0">
             <div className="w-8 h-8 rounded-full bg-[#1877F2] flex items-center justify-center shadow-md shadow-blue-500/20 text-white shrink-0">
@@ -1586,89 +1602,129 @@ function DispatchCentreComponent({
             </h2>
           </div>
 
-          {/* Center: Browse Buttons & Counts */}
-          <div className="flex items-center gap-2.5 shrink-0 flex-nowrap">
+          {/* Center: Concessions & Vouchers Buttons with Counts */}
+          <div className="flex items-center justify-center gap-2 flex-nowrap xl:flex-1 xl:min-w-0">
             <button
               type="button"
               onClick={onBrowseConcessions}
-              className="flex items-center gap-2 bg-[#1A73E8] hover:bg-[#1557b0] text-white rounded-lg h-8 px-3 text-xs font-semibold transition-colors whitespace-nowrap shadow-sm"
+              className="flex items-center gap-1.5 bg-[#1A73E8] hover:bg-[#1557b0] text-white rounded-lg h-8 px-3 text-xs font-semibold transition-colors whitespace-nowrap shadow-sm cursor-pointer"
             >
-              <FileSpreadsheet className="w-4 h-4 shrink-0" />
-              <span className="whitespace-nowrap">Browse concessions</span>
+              <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
+              <span>Concessions</span>
+              <span className="bg-blue-600/60 text-white text-[11px] px-1.5 py-0.5 rounded-full font-mono">
+                {totalDbCount.toLocaleString('en-GB')}
+              </span>
             </button>
-            <span className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 font-normal whitespace-nowrap">
-              {totalDbCount} concessions
-            </span>
 
             <button
               type="button"
               onClick={onBrowseVouchers}
-              className="flex items-center gap-2 bg-[#1A73E8] hover:bg-[#1557b0] text-white rounded-lg h-8 px-3 text-xs font-semibold transition-colors whitespace-nowrap shadow-sm"
+              title={`Available ${voucherSummary.breakdown.available} · Used ${voucherSummary.breakdown.used} · Withdrawn ${voucherSummary.breakdown.withdrawn} · Older batches ${voucherSummary.breakdown.expired}`}
+              className="flex items-center gap-1.5 bg-[#1A73E8] hover:bg-[#1557b0] text-white rounded-lg h-8 px-3 text-xs font-semibold transition-colors whitespace-nowrap shadow-sm cursor-pointer"
             >
-              <FileText className="w-4 h-4 shrink-0" />
-              <span className="whitespace-nowrap">Browse vouchers</span>
+              <FileText className="w-3.5 h-3.5 shrink-0" />
+              <span>Vouchers</span>
+              <span className="bg-blue-600/60 text-white text-[11px] px-1.5 py-0.5 rounded-full font-mono">
+                {totalVouchersCount.toLocaleString('en-GB')}
+              </span>
             </button>
-            <span className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 font-normal whitespace-nowrap">
-              {totalVouchersCount} vouchers
-            </span>
           </div>
 
-          {/* Right: Active Date Codes & Validity Badge on a single line */}
-          <div className="flex flex-col gap-1 items-end sm:items-start whitespace-nowrap shrink-0 ml-auto lg:ml-0">
-            <div className="flex flex-row items-center gap-2">
-              <label 
-                className={`text-xs sm:text-sm font-medium whitespace-nowrap shrink-0 ${
-                  isRangeStockLow ? "text-[#b91c1c]" : "text-[#15803d]"
-                }`}
-              >
-                Active Date Codes ({unusedVouchersForDay.length}) {formatDateUK(currentPermitValidFromIso)} - {formatDateUK(currentPermitValidToIso)}:
-              </label>
-              <select
-                value=""
-                onChange={handleActiveDateCodeChange}
-                disabled={unusedVouchersForDay.length === 0 || isReplacingCode}
-                className={`h-8 px-2.5 py-1 border rounded-lg text-xs font-mono font-bold focus:outline-none transition shrink-0 ${
-                  isRangeStockLow
-                    ? "bg-[#fee2e2] text-[#b91c1c] border-[#dc2626] cursor-pointer"
-                    : "bg-[#dcfce7] text-[#15803d] border-[#16a34a] cursor-pointer"
-                }`}
-              >
-                <option value="" disabled className="font-mono font-normal text-slate-700 bg-white">
-                  {vouchersDatabase.length === 0
-                    ? "-- No Vouchers Uploaded --"
-                    : unusedVouchersForDay.length === 0
-                      ? "-- 0 Available --"
-                      : isReplacingCode
-                        ? "Replacing..."
-                        : "-- Choose Code --"}
-                </option>
-                {unusedVouchersForDay.map((v, index) => {
-                  const cleanCode = cleanVoucherCodeValue(v.code).toUpperCase();
-                  return (
-                    <option
-                      key={`voucher_${cleanCode}_${index}`}
-                      value={cleanCode}
-                      className="font-mono text-gray-900 bg-white"
-                    >
-                      {cleanCode}
-                    </option>
-                  );
-                })}
-              </select>
-              {voucherBatchBadge && (
-                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 shadow-sm ${voucherBatchBadge.className}`}>
-                  <span className="text-[11px] leading-none select-none">{voucherBatchBadge.icon}</span>{' '}
-                  <span>{voucherBatchBadge.text}</span>
+          {/* Right Group: ml-auto / flex */}
+          <div className="flex flex-wrap items-center justify-end gap-2.5 ml-auto xl:ml-0 whitespace-nowrap shrink-0">
+            {/* Permit label */}
+            <span className="text-xs font-semibold px-2.5 py-1 rounded-md bg-slate-100 dark:bg-[#07152b] border border-slate-200 dark:border-[#132A4A] text-slate-800 dark:text-slate-200">
+              {activeRecord ? `For #${activeRecord.formId || activeRecord.id} · ${activeRecord.vrm || 'No VRM'}` : "No permit selected"}
+            </span>
+
+            {/* Window chip */}
+            {(() => {
+              const w = getPermitVoucherWindow(activeRecord);
+              const fromUK = formatDateUK(w.fromISO);
+              const toUK = formatDateUK(w.toISO);
+              const shortFrom = fromUK.length >= 5 ? fromUK.substring(0, 5) : fromUK;
+              const shortTo = toUK.length >= 5 ? toUK.substring(0, 5) : toUK;
+              return (
+                <span
+                  title={`${fromUK} – ${toUK}`}
+                  className="text-xs font-mono font-medium px-2 py-1 rounded-md bg-slate-100 dark:bg-[#07152b] border border-slate-200 dark:border-[#132A4A] text-slate-700 dark:text-slate-300"
+                >
+                  {shortFrom} – {shortTo}
                 </span>
-              )}
-            </div>
-            {assignmentError && (
-              <div className="text-xs text-rose-600 dark:text-rose-400 font-medium">
-                {assignmentError}
-              </div>
+              );
+            })()}
+
+            {/* Stock count + bar */}
+            {(() => {
+              const availableCount = filteredUnusedVouchers.length;
+              const w = getPermitVoucherWindow(activeRecord);
+              const totalInWindow = vouchersDatabase.filter(v => isVoucherForPermitDateRange(v, w.fromISO, w.toISO)).length;
+              const stockLvl = getStockLevel(availableCount);
+              const barColor = stockLvl === 'green' ? 'bg-emerald-500' : stockLvl === 'amber' ? 'bg-amber-500' : 'bg-rose-500';
+              const pct = totalInWindow > 0 ? Math.min(100, Math.max(0, (availableCount / totalInWindow) * 100)) : 0;
+              const needsWarningIcon = stockLvl === 'amber' || stockLvl === 'red';
+
+              return (
+                <div
+                  title={`${availableCount} of ${totalInWindow} codes left for ${formatDateUK(w.fromISO)} – ${formatDateUK(w.toISO)}`}
+                  className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-slate-100 dark:bg-[#07152b] border border-slate-200 dark:border-[#132A4A] text-xs font-mono"
+                >
+                  {needsWarningIcon && <span className="text-amber-500 text-[10px]">▲</span>}
+                  <span className={stockLvl === 'green' ? 'text-emerald-600 dark:text-emerald-400 font-bold' : stockLvl === 'amber' ? 'text-amber-600 dark:text-amber-400 font-bold' : 'text-rose-600 dark:text-rose-400 font-bold'}>
+                    {availableCount}/{totalInWindow}
+                  </span>
+                  <div className="w-[54px] h-1.5 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
+                    <div className={`h-full ${barColor} transition-all`} style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Code picker */}
+            <VoucherCodePicker
+              codes={filteredUnusedVouchers}
+              onSelect={handleActiveDateCodeSelect}
+              disabled={filteredUnusedVouchers.length === 0 || isReplacingCode}
+              placeholder={
+                vouchersDatabase.length === 0
+                  ? "-- No Vouchers Uploaded --"
+                  : filteredUnusedVouchers.length === 0
+                    ? "-- 0 Available --"
+                    : isReplacingCode
+                      ? "Replacing..."
+                      : "-- Choose Code --"
+              }
+            />
+
+            {/* Upload new batch button when available is 0 */}
+            {filteredUnusedVouchers.length === 0 && vouchersDatabase.length > 0 && (
+              <button
+                type="button"
+                onClick={onBrowseVouchers}
+                className="bg-rose-600 hover:bg-rose-700 text-white rounded-lg h-8 px-2.5 text-xs font-semibold transition-colors whitespace-nowrap shadow-sm cursor-pointer"
+              >
+                Upload new batch
+              </button>
+            )}
+
+            {/* Cover pill */}
+            {voucherBatchBadge && (
+              <span
+                title={`Vouchers are loaded for permits starting up to ${voucherBatchBadge.formattedDate || ''} (${voucherBatchBadge.daysDiff ?? 0} days of cover)`}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 shadow-sm ${voucherBatchBadge.className}`}
+              >
+                <span className="text-[11px] leading-none select-none">{voucherBatchBadge.icon}</span>
+                <span>{voucherBatchBadge.text}</span>
+              </span>
             )}
           </div>
         </div>
+
+        {assignmentError && (
+          <div className="text-xs text-rose-600 dark:text-rose-400 font-medium">
+            {assignmentError}
+          </div>
+        )}
 
         {/* Second Row: Search & Filters */}
         <div className="flex flex-col gap-2.5 pt-1">

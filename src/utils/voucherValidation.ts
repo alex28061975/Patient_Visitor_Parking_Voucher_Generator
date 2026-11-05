@@ -516,9 +516,94 @@ export function getFirstValidUnusedCodeForDate(
   return null;
 }
 
+export function getStockLevel(n: number): 'green' | 'amber' | 'red' {
+  if (n > 10) return 'green';
+  if (n >= 1) return 'amber';
+  return 'red';
+}
+
+export function getCoverLevel(daysLeft: number): 'green' | 'amber' | 'red' {
+  if (daysLeft > 7) return 'green';
+  if (daysLeft >= 4) return 'amber';
+  return 'red';
+}
+
+export function getVoucherInventorySummary(
+  vouchersDatabase?: ParsedVoucherData[] | null,
+  assignedCodesSet?: Set<string> | null,
+  fromISO?: string | null,
+  toISO?: string | null,
+  todayISO?: string | null
+): {
+  availableInWindow: number;
+  totalInWindow: number;
+  breakdown: { available: number; used: number; withdrawn: number; expired: number };
+} {
+  const vouchers = vouchersDatabase || [];
+  const assigned = assignedCodesSet || new Set<string>();
+  const today = normalizeDateToISO(todayISO || new Date().toISOString());
+
+  let withdrawn = 0;
+  let used = 0;
+  let expired = 0;
+  let available = 0;
+
+  let totalInWindow = 0;
+  let availableInWindow = 0;
+
+  const normFrom = fromISO ? normalizeDateToISO(fromISO) : "";
+  const normTo = toISO ? normalizeDateToISO(toISO) : (normFrom ? addDaysISO(normFrom, 6) : "");
+
+  vouchers.forEach(v => {
+    if (!v || !v.code) return;
+    const clean = cleanVoucherCodeValue(v.code).toUpperCase();
+    const status = String(v.status || "").toLowerCase().trim();
+    const vTo = getVoucherValidToISO(v);
+
+    let cat: 'withdrawn' | 'used' | 'expired' | 'available' = 'available';
+
+    if (status === "withdrawn") {
+      cat = 'withdrawn';
+      withdrawn++;
+    } else if (
+      v.isUsed === true ||
+      status === "used" ||
+      status === "dispatched" ||
+      status === "assigned" ||
+      status === "sent" ||
+      status === "completed" ||
+      status === "cancelled" ||
+      status === "canceled" ||
+      assigned.has(clean)
+    ) {
+      cat = 'used';
+      used++;
+    } else if (vTo && today && vTo < today) {
+      cat = 'expired';
+      expired++;
+    } else {
+      cat = 'available';
+      available++;
+    }
+
+    if (normFrom && normTo && isVoucherForPermitDateRange(v, normFrom, normTo)) {
+      totalInWindow++;
+      if (cat === 'available') {
+        availableInWindow++;
+      }
+    }
+  });
+
+  return {
+    availableInWindow,
+    totalInWindow,
+    breakdown: { available, used, withdrawn, expired }
+  };
+}
+
 export interface VoucherBatchBadgeResult {
   type: 'green' | 'amber' | 'red';
-  icon: '🟢' | '⚠️' | '🔴';
+  icon: '●' | '▲';
   text: string;
   className: string;
   targetValidFromIso?: string;
@@ -529,18 +614,10 @@ export interface VoucherBatchBadgeResult {
 
 /**
  * Calculates the voucher batch validity and warning state for the top-bar badge.
- * 1. Color Threshold Rules:
- *    - Green (> 3 days remaining):
- *      "🟢 Codes Valid Until: DD/MM/YYYY (X days left)"
- *    - Amber (1 to 3 days remaining):
- *      "⚠️ Voucher Batch Expiring Soon: DD/MM/YYYY (X days left)"
- *    - Red (0 days or batch expired):
- *      "🔴 No Active Codes Available — Add New Batch"
- * 2. Strict Date Calculation:
- *    - Strictly parses dates in local midnight time against system date (or referenceDate):
- *      const today = new Date(); today.setHours(0, 0, 0, 0);
- *      const validFromDate = new Date(activeCode.validFrom); validFromDate.setHours(0, 0, 0, 0);
- *      const daysLeft = Math.round((validFromDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+ * Thresholds:
+ * - Green (> 7 days remaining): "● Cover to DD/MM · Nd"
+ * - Amber (4 to 7 days remaining): "▲ Cover to DD/MM · Nd"
+ * - Red (<= 3 days remaining or no active codes): "▲ Cover to DD/MM · Nd" or "No Active Codes Available — Add New Batch"
  */
 export function computeVoucherBatchExpiryBadge(params: {
   vouchersDatabase?: ParsedVoucherData[];
@@ -559,7 +636,7 @@ export function computeVoucherBatchExpiryBadge(params: {
 
   const redResult: VoucherBatchBadgeResult = {
     type: "red",
-    icon: "🔴",
+    icon: "▲",
     text: "No Active Codes Available — Add New Batch",
     className: "text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-800/60"
   };
@@ -620,8 +697,6 @@ export function computeVoucherBatchExpiryBadge(params: {
     return redResult;
   }
 
-  // 1. Target Field Adjustment:
-  // Force target date variable to use latest/active batch's 'VALIDFROM' (or valid_from / startDate).
   let targetValidFromIso = "";
   for (const v of availableVouchersForSite) {
     const fromIso = getVoucherValidFromISO(v);
@@ -636,7 +711,6 @@ export function computeVoucherBatchExpiryBadge(params: {
     return redResult;
   }
 
-  // Determine the expiry date of the active/latest batch for expiration checking
   let batchExpiryIso = "";
   for (const v of availableVouchersForSite) {
     const fromIso = getVoucherValidFromISO(v);
@@ -654,11 +728,6 @@ export function computeVoucherBatchExpiryBadge(params: {
     batchExpiryIso = addDaysISO(targetValidFromIso, 6);
   }
 
-  // 2. Days Remaining Formula:
-  // Parse date strictly in local midnight time:
-  // const today = new Date(); today.setHours(0, 0, 0, 0);
-  // const validFromDate = new Date(activeCode.validFrom); validFromDate.setHours(0, 0, 0, 0);
-  // const daysLeft = Math.round((validFromDate - today) / (1000 * 60 * 60 * 24));
   let today = referenceDate ? new Date(referenceDate) : new Date();
   if (!referenceDate && todayDateIso) {
     const normToday = normalizeDateToISO(todayDateIso);
@@ -682,7 +751,6 @@ export function computeVoucherBatchExpiryBadge(params: {
 
   const daysLeft = Math.round((validFromDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 
-  // Determine batch expiry in local midnight time to detect fully expired batches
   let batchExpiryDate: Date | null = null;
   if (batchExpiryIso) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(batchExpiryIso)) {
@@ -694,8 +762,6 @@ export function computeVoucherBatchExpiryBadge(params: {
     batchExpiryDate.setHours(0, 0, 0, 0);
   }
 
-  // 1. Color Threshold Rules:
-  // - Red (0 days or batch expired): "🔴 No Active Codes Available — Add New Batch"
   if (batchExpiryDate && batchExpiryDate.getTime() < today.getTime()) {
     return redResult;
   }
@@ -703,18 +769,35 @@ export function computeVoucherBatchExpiryBadge(params: {
     return redResult;
   }
 
-  // Format target validFrom date to DD/MM/YYYY
   const parts = targetValidFromIso.split("-");
   const formattedDate = parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : targetValidFromIso;
 
-  const daysLabel = `${daysLeft} ${daysLeft === 1 ? "day" : "days"} left`;
+  const coverToIso = batchExpiryIso || addDaysISO(targetValidFromIso, 6);
+  const coverToUK = formatDateUK(coverToIso);
+  const coverToDDMM = coverToUK.length >= 5 ? coverToUK.substring(0, 5) : coverToUK;
 
-  // - Amber (1 to 3 days remaining): "⚠️ Voucher Batch Expiring Soon: DD/MM/YYYY (X days left)"
+  const textLabel = `Cover to ${coverToDDMM} · ${daysLeft}d`;
+
+  // Red (<= 3 days remaining)
   if (daysLeft <= 3) {
     return {
+      type: "red",
+      icon: "▲",
+      text: textLabel,
+      className: "text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-800/60",
+      targetValidFromIso,
+      maxExpiryIso: batchExpiryIso,
+      formattedDate,
+      daysDiff: daysLeft
+    };
+  }
+
+  // Amber (4 to 7 days remaining)
+  if (daysLeft <= 7) {
+    return {
       type: "amber",
-      icon: "⚠️",
-      text: `Voucher Batch Expiring Soon: ${formattedDate} (${daysLabel})`,
+      icon: "▲",
+      text: textLabel,
       className: "text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800/60",
       targetValidFromIso,
       maxExpiryIso: batchExpiryIso,
@@ -723,11 +806,11 @@ export function computeVoucherBatchExpiryBadge(params: {
     };
   }
 
-  // - Green (> 3 days remaining): "🟢 Codes Valid Until: DD/MM/YYYY (X days left)"
+  // Green (> 7 days remaining)
   return {
     type: "green",
-    icon: "🟢",
-    text: `Codes Valid Until: ${formattedDate} (${daysLabel})`,
+    icon: "●",
+    text: textLabel,
     className: "text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800/60",
     targetValidFromIso,
     maxExpiryIso: batchExpiryIso,
@@ -942,6 +1025,39 @@ export function getSelectableActiveDateCodes(
     if (allocatedForCurrent.has(codeUpper)) return false;
 
     return true;
+  });
+}
+
+/**
+ * Filters a list of vouchers to exclude the record's own current codes
+ * (voucherCode, prePaidCode, replacementCode, originalVoucherCode, etc.).
+ */
+export function excludeRecordOwnCodes(
+  list: ParsedVoucherData[],
+  record: CsvPermitRecord | undefined | null
+): ParsedVoucherData[] {
+  if (!list || list.length === 0) return [];
+  if (!record) return list;
+
+  const excluded = new Set<string>();
+  const fields = ['voucherCode', 'prePaidCode', 'replacementCode', 'originalVoucherCode', 'qrCode', 'voucherCodesText'];
+  fields.forEach(field => {
+    const val = (record as any)[field];
+    if (val) {
+      String(val).split(/[\n,;\s]+/).forEach(part => {
+        const clean = cleanVoucherCodeValue(part).toUpperCase();
+        if (clean && clean !== '-') {
+          excluded.add(clean);
+        }
+      });
+    }
+  });
+
+  return list.filter(v => {
+    if (!v || !v.code) return false;
+    const cleanCode = cleanVoucherCodeValue(v.code).toUpperCase();
+    if (!cleanCode || cleanCode === '-') return false;
+    return !excluded.has(cleanCode);
   });
 }
 

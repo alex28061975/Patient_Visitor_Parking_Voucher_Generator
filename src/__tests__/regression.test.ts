@@ -960,8 +960,8 @@ Barts Health NHS Trust`;
   // - Amber (1 to 3 days remaining): "⚠️ Voucher Batch Expiring Soon: DD/MM/YYYY (X days left)"
   // - Red (0 days or batch expired): "🔴 No Active Codes Available — Add New Batch"
   // =========================================================================
-  it('TEST 21: Voucher inventory validity calculation with color thresholds (Green > 3d, Amber 1-3d, Red <= 0d)', () => {
-    // 1. Amber scenario: today is 28/09/2026, validFrom is 30/09/2026 (2 days left -> Amber)
+  it('TEST 21: Voucher inventory validity calculation with color thresholds (Green > 7d, Amber 4-7d, Red <= 3d)', () => {
+    // 1. Red scenario (2 days left <= 3d): today is 28/09/2026, validFrom is 30/09/2026 (2 days left -> Red)
     const vouchersPrimary: ParsedVoucherData[] = [
       { code: 'V_OCT_25', validFrom: '2026-09-30', validTo: '2026-10-25', status: 'active', isUsed: false }
     ];
@@ -969,10 +969,10 @@ Barts Health NHS Trust`;
       vouchersDatabase: vouchersPrimary,
       todayDateIso: '2026-09-28'
     });
-    assert.equal(badgePrimary.type, 'amber');
-    assert.equal(badgePrimary.icon, '⚠️');
+    assert.equal(badgePrimary.type, 'red');
+    assert.equal(badgePrimary.icon, '▲');
     assert.equal(badgePrimary.daysDiff, 2);
-    assert.equal(badgePrimary.text, 'Voucher Batch Expiring Soon: 30/09/2026 (2 days left)');
+    assert.equal(badgePrimary.text, 'Cover to 25/10 · 2d');
 
     // Also verify referenceDate directly
     const refToday = new Date(2026, 8, 28); // 28/09/2026
@@ -981,12 +981,12 @@ Barts Health NHS Trust`;
       vouchersDatabase: vouchersPrimary,
       referenceDate: refToday
     });
-    assert.equal(badgeWithRef.type, 'amber');
-    assert.equal(badgeWithRef.icon, '⚠️');
+    assert.equal(badgeWithRef.type, 'red');
+    assert.equal(badgeWithRef.icon, '▲');
     assert.equal(badgeWithRef.daysDiff, 2);
-    assert.equal(badgeWithRef.text, 'Voucher Batch Expiring Soon: 30/09/2026 (2 days left)');
+    assert.equal(badgeWithRef.text, 'Cover to 25/10 · 2d');
 
-    // 2. 1 day left scenario: today is 28/09/2026, validFrom is 29/09/2026 (1 day left -> Amber)
+    // 2. 1 day left scenario: today is 28/09/2026, validFrom is 29/09/2026 (1 day left -> Red)
     const vouchersOneDay: ParsedVoucherData[] = [
       { code: 'V_TOMORROW', validFrom: '2026-09-29', validTo: '2026-10-05', status: 'active', isUsed: false }
     ];
@@ -994,12 +994,12 @@ Barts Health NHS Trust`;
       vouchersDatabase: vouchersOneDay,
       todayDateIso: '2026-09-28'
     });
-    assert.equal(badgeOneDay.type, 'amber');
-    assert.equal(badgeOneDay.icon, '⚠️');
+    assert.equal(badgeOneDay.type, 'red');
+    assert.equal(badgeOneDay.icon, '▲');
     assert.equal(badgeOneDay.daysDiff, 1);
-    assert.equal(badgeOneDay.text, 'Voucher Batch Expiring Soon: 29/09/2026 (1 day left)');
+    assert.equal(badgeOneDay.text, 'Cover to 05/10 · 1d');
 
-    // 3. 3 days left scenario: today is 28/09/2026, validFrom is 01/10/2026 (3 days left -> Amber)
+    // 3. 3 days left scenario: today is 28/09/2026, validFrom is 01/10/2026 (3 days left -> Red)
     const vouchersThreeDays: ParsedVoucherData[] = [
       { code: 'V_THREE', validFrom: '2026-10-01', validTo: '2026-10-08', status: 'active', isUsed: false }
     ];
@@ -1007,12 +1007,12 @@ Barts Health NHS Trust`;
       vouchersDatabase: vouchersThreeDays,
       todayDateIso: '2026-09-28'
     });
-    assert.equal(badgeThreeDays.type, 'amber');
-    assert.equal(badgeThreeDays.icon, '⚠️');
+    assert.equal(badgeThreeDays.type, 'red');
+    assert.equal(badgeThreeDays.icon, '▲');
     assert.equal(badgeThreeDays.daysDiff, 3);
-    assert.equal(badgeThreeDays.text, 'Voucher Batch Expiring Soon: 01/10/2026 (3 days left)');
+    assert.equal(badgeThreeDays.text, 'Cover to 08/10 · 3d');
 
-    // 4. Green scenario: > 3 days (4 days left -> Green): today 28/09/2026, validFrom 02/10/2026
+    // 4. Amber scenario: 4 to 7 days (4 days left -> Amber): today 28/09/2026, validFrom 02/10/2026
     const vouchersFourDays: ParsedVoucherData[] = [
       { code: 'V_FOUR', validFrom: '2026-10-02', validTo: '2026-10-09', status: 'active', isUsed: false }
     ];
@@ -1020,10 +1020,10 @@ Barts Health NHS Trust`;
       vouchersDatabase: vouchersFourDays,
       todayDateIso: '2026-09-28'
     });
-    assert.equal(badgeFourDays.type, 'green');
-    assert.equal(badgeFourDays.icon, '🟢');
+    assert.equal(badgeFourDays.type, 'amber');
+    assert.equal(badgeFourDays.icon, '▲');
     assert.equal(badgeFourDays.daysDiff, 4);
-    assert.equal(badgeFourDays.text, 'Codes Valid Until: 02/10/2026 (4 days left)');
+    assert.equal(badgeFourDays.text, 'Cover to 09/10 · 4d');
 
     // 5. Red badge: 0 days remaining (validFrom is today)
     const vouchersZeroDays: ParsedVoucherData[] = [
@@ -1034,7 +1034,7 @@ Barts Health NHS Trust`;
       todayDateIso: '2026-09-28'
     });
     assert.equal(badgeZeroDays.type, 'red');
-    assert.equal(badgeZeroDays.icon, '🔴');
+    assert.equal(badgeZeroDays.icon, '▲');
     assert.equal(badgeZeroDays.text, 'No Active Codes Available — Add New Batch');
 
     // 6. Red badge: available vouchers expired in the past
@@ -1046,7 +1046,7 @@ Barts Health NHS Trust`;
       todayDateIso: '2026-09-28'
     });
     assert.equal(badgeExpired.type, 'red');
-    assert.equal(badgeExpired.icon, '🔴');
+    assert.equal(badgeExpired.icon, '▲');
     assert.equal(badgeExpired.text, 'No Active Codes Available — Add New Batch');
 
     // 7. Red badge: 0 active/available vouchers remain (empty database)
@@ -1055,7 +1055,7 @@ Barts Health NHS Trust`;
       todayDateIso: '2026-09-28'
     });
     assert.equal(badgeEmpty.type, 'red');
-    assert.equal(badgeEmpty.icon, '🔴');
+    assert.equal(badgeEmpty.icon, '▲');
     assert.equal(badgeEmpty.text, 'No Active Codes Available — Add New Batch');
 
     // 8. Red badge: all vouchers are already assigned/used
@@ -1069,7 +1069,7 @@ Barts Health NHS Trust`;
       todayDateIso: '2026-09-28'
     });
     assert.equal(badgeAllUsed.type, 'red');
-    assert.equal(badgeAllUsed.icon, '🔴');
+    assert.equal(badgeAllUsed.icon, '▲');
     assert.equal(badgeAllUsed.text, 'No Active Codes Available — Add New Batch');
 
     // 9. Hospital/site filtering: respects selected hospital inventory
@@ -1082,33 +1082,33 @@ Barts Health NHS Trust`;
       selectedHospital: 'Whipps Cross Hospital',
       todayDateIso: '2026-09-28'
     });
-    assert.equal(badgeWhipps.type, 'green');
-    assert.equal(badgeWhipps.icon, '🟢');
+    assert.equal(badgeWhipps.type, 'amber');
+    assert.equal(badgeWhipps.icon, '▲');
     assert.equal(badgeWhipps.daysDiff, 7);
-    assert.equal(badgeWhipps.text, 'Codes Valid Until: 05/10/2026 (7 days left)');
+    assert.equal(badgeWhipps.text, 'Cover to 12/10 · 7d');
 
     const badgeNewham = computeVoucherBatchExpiryBadge({
       vouchersDatabase: vouchersHospital,
       selectedHospital: 'Newham Hospital',
       todayDateIso: '2026-09-28'
     });
-    assert.equal(badgeNewham.type, 'amber');
-    assert.equal(badgeNewham.icon, '⚠️');
+    assert.equal(badgeNewham.type, 'red');
+    assert.equal(badgeNewham.icon, '▲');
     assert.equal(badgeNewham.daysDiff, 2);
-    assert.equal(badgeNewham.text, 'Voucher Batch Expiring Soon: 30/09/2026 (2 days left)');
+    assert.equal(badgeNewham.text, 'Cover to 07/10 · 2d');
 
-    // 10. Supports valid_from and startDate field naming (> 3 days -> Green)
-    const vouchersAliases: ParsedVoucherData[] = [
-      { code: 'V_START', startDate: '03/10/2026', validTo: '10/10/2026', status: 'active', isUsed: false }
+    // 10. Green scenario (> 7 days left, e.g. 8 days left -> Green): today 28/09/2026, validFrom 06/10/2026
+    const vouchersGreen: ParsedVoucherData[] = [
+      { code: 'V_GREEN', validFrom: '2026-10-06', validTo: '2026-10-13', status: 'active', isUsed: false }
     ];
-    const badgeAlias = computeVoucherBatchExpiryBadge({
-      vouchersDatabase: vouchersAliases,
+    const badgeGreen = computeVoucherBatchExpiryBadge({
+      vouchersDatabase: vouchersGreen,
       todayDateIso: '2026-09-28'
     });
-    assert.equal(badgeAlias.type, 'green');
-    assert.equal(badgeAlias.icon, '🟢');
-    assert.equal(badgeAlias.daysDiff, 5);
-    assert.equal(badgeAlias.text, 'Codes Valid Until: 03/10/2026 (5 days left)');
+    assert.equal(badgeGreen.type, 'green');
+    assert.equal(badgeGreen.icon, '●');
+    assert.equal(badgeGreen.daysDiff, 8);
+    assert.equal(badgeGreen.text, 'Cover to 13/10 · 8d');
   });
 
   // =========================================================================
