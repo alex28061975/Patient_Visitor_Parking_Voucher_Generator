@@ -606,7 +606,31 @@ export function enrichRecordsWithVouchers(
                              : undefined);
 
     const recId = String(record.formId || record.id || index);
-    const existingCode = record.voucherCode || record.prePaidCode || record.qrCode || record.serialNumber;
+
+    let resolvedExistingCode = "";
+    const repCode = record.replacementCode;
+    if (repCode && String(repCode) !== "-" && String(repCode).toUpperCase() !== "CANCELLED") {
+      const cleanRep = cleanVoucherCodeValue(String(repCode)).toUpperCase();
+      const matchingVoucher = voucherByCleanCode.get(cleanRep);
+      const dateMatches = Boolean(reqIso && matchingVoucher && isVoucherForPermitDateRange(matchingVoucher, reqIso, reqIsoTo));
+      const vrmMatches = !matchingVoucher || isVoucherVrmCompatible(matchingVoucher.vrm, cleanVrm);
+      if (matchingVoucher && dateMatches && vrmMatches && cleanRep && cleanRep !== "-" && cleanRep !== "CANCELLED" && !checkIsAssigned(cleanRep, custAssignedSet, recId)) {
+        resolvedExistingCode = cleanRep;
+      }
+    }
+
+    if (!resolvedExistingCode) {
+      const existingCode = record.voucherCode || record.prePaidCode || record.qrCode || record.serialNumber;
+      if (existingCode && String(existingCode) !== "-" && String(existingCode).toUpperCase() !== "CANCELLED") {
+        const clean = cleanVoucherCodeValue(String(existingCode)).toUpperCase();
+        const matchingVoucherInDb = voucherByCleanCode.get(clean);
+        const dateMatches = Boolean(reqIso && matchingVoucherInDb && isVoucherForPermitDateRange(matchingVoucherInDb, reqIso, reqIsoTo));
+        const vrmMatches = !matchingVoucherInDb || isVoucherVrmCompatible(matchingVoucherInDb.vrm, cleanVrm);
+        if (matchingVoucherInDb && dateMatches && vrmMatches && clean !== "-" && clean !== "CANCELLED" && !checkIsAssigned(clean, custAssignedSet, recId)) {
+          resolvedExistingCode = clean;
+        }
+      }
+    }
 
     // Fast O(1) check: Only accept customOverride if it exists in current vouchersDb and matches permit date
     if (customOverride && String(customOverride) !== "-" && String(customOverride).toUpperCase() !== "CANCELLED") {
@@ -618,18 +642,9 @@ export function enrichRecordsWithVouchers(
         registerCodeGlobally(clean, recId, custAssignedSet);
         recordClaimedCodes.set(index, clean);
       }
-    } else if (existingCode && String(existingCode) !== "-" && String(existingCode).toUpperCase() !== "CANCELLED") {
-      const clean = cleanVoucherCodeValue(String(existingCode)).toUpperCase();
-      
-      // Fast O(1) check: only accept if the code exists in current vouchersDatabase and matches permit date
-      const matchingVoucherInDb = voucherByCleanCode.get(clean);
-      const dateMatches = Boolean(reqIso && matchingVoucherInDb && isVoucherForPermitDateRange(matchingVoucherInDb, reqIso, reqIsoTo));
-      const vrmMatches = !matchingVoucherInDb || isVoucherVrmCompatible(matchingVoucherInDb.vrm, cleanVrm);
-      
-      if (matchingVoucherInDb && dateMatches && vrmMatches && clean !== "-" && clean !== "CANCELLED" && !checkIsAssigned(clean, custAssignedSet, recId)) {
-        registerCodeGlobally(clean, recId, custAssignedSet);
-        recordClaimedCodes.set(index, clean);
-      }
+    } else if (resolvedExistingCode) {
+      registerCodeGlobally(resolvedExistingCode, recId, custAssignedSet);
+      recordClaimedCodes.set(index, resolvedExistingCode);
     }
   });
 

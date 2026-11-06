@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import { isVrmSilentBlockedSync } from "../lib/blocklist";
 import { getSelectableActiveDateCodes, buildAssignedCodeSet, getPermitVoucherWindow, formatDateUK } from "../utils/voucherValidation";
+import { buildReplacementFormUpdate } from "../utils/dispatchUtils";
 
 // Helper to format string to Title Case (capitalize each word)
 function toTitleCase(str: string): string {
@@ -469,20 +470,7 @@ export function PermitForm({
 
                   setIsReplacingCode(true);
 
-                  onChange({
-                    id: data.id,
-                    formId: data.formId,
-                    vrm: data.vrm,
-                    validFrom: data.validFrom,
-                    dateRequired: data.dateRequired,
-                    todayDate: data.todayDate,
-                    voucherCodesText: selectedCode,
-                    replacementCode: selectedCode,
-                    status: "Pending",
-                    emailType: "RESEND_CONCESSION",
-                    isResend: true,
-                    emailTemplate: "replacement"
-                  });
+                  onChange(buildReplacementFormUpdate(data, selectedCode) as any);
 
                   setTimeout(() => {
                     setIsReplacingCode(false);

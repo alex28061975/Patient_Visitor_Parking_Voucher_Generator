@@ -581,3 +581,22 @@ export async function syncPendingDispatches(): Promise<{ synced: number; remaini
     return { synced: 0, remaining: 0 };
   }
 }
+
+/**
+ * Builds a standardized permit update object when replacing a voucher code
+ */
+export function buildReplacementFormUpdate(currentRec: any, selectedCode: string) {
+  return {
+    id: currentRec?.id,
+    formId: currentRec?.formId,
+    vrm: currentRec?.vrm,
+    originalVoucherCode: currentRec?.originalVoucherCode || currentRec?.voucherCode || currentRec?.prePaidCode || undefined,
+    replacementCode: selectedCode,
+    voucherCodesText: selectedCode,
+    status: "Pending",
+    emailType: "RESEND_CONCESSION",
+    isResend: true,
+    emailTemplate: "replacement"
+  };
+}
+

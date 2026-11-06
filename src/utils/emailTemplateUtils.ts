@@ -362,7 +362,7 @@ On your first day of parking, please take your QR code to the pay machine, selec
 
 When prompted to scan a Blue Badge or concession, please scan your QR code.
 
-Your QR code only needs to be scanned once. After it has been scanned successfully, you do not need to scan it again during the validity period of your concession.
+Your QR code only needs to be scanned once, when you first pay. After it has been scanned successfully, your payment covers the whole validity period of your concession, so you do not need to scan it again or pay again when you leave and return during that time.
 
 Your concession is valid for ${duration}, from ${validFrom} to ${validExpiry}.
 
@@ -380,7 +380,7 @@ Dear ${driverName},<br/><br/>
 Please find attached your parking concession QR code for vehicle <strong>${vrm}</strong>.<br/><br/>
 On your first day of parking, please take your QR code to the pay machine, select Concession, and enter your vehicle registration number <strong>${vrm}</strong>.<br/><br/>
 When prompted to scan a Blue Badge or concession, please scan your QR code.<br/><br/>
-Your QR code only needs to be scanned once. After it has been scanned successfully, you do not need to scan it again during the validity period of your concession.<br/><br/>
+Your QR code only needs to be scanned once, when you first pay. After it has been scanned successfully, your payment covers the whole validity period of your concession, so you do not need to scan it again or pay again when you leave and return during that time.<br/><br/>
 Your concession is valid for ${duration}, from ${validFrom} to ${validExpiry}.<br/><br/>
 Please note that concession payments are <span style="color: #C00000; font-weight: bold;">non-refundable</span>.<br/><br/>
 If you have any queries, please contact: <a href="mailto:${NHS_SUPPORT_EMAIL}" style="color: #005EB8; text-decoration: underline;">${NHS_SUPPORT_EMAIL}</a><br/><br/>
@@ -416,7 +416,7 @@ On your next visit, please take your replacement QR code to the pay machine, sel
 
 When prompted to scan a Blue Badge or concession, please scan your replacement QR code.
 
-Your replacement QR code only needs to be scanned once. After it has been scanned successfully, you do not need to scan it again during the validity period of your concession.
+Your replacement QR code only needs to be scanned once, when you first pay. After it has been scanned successfully, your payment covers the whole validity period of your concession, so you do not need to scan it again or pay again when you leave and return during that time.
 
 Your concession is valid for ${duration}, from ${validFrom} to ${validExpiry}.
 
@@ -440,7 +440,7 @@ We apologise for any inconvenience caused by the previous code.<br/><br/>
 Please use this replacement QR code instead of your previous QR code.<br/><br/>
 On your next visit, please take your replacement QR code to the pay machine, select Concession, and enter your vehicle registration number <strong>${vrm}</strong>.<br/><br/>
 When prompted to scan a Blue Badge or concession, please scan your replacement QR code.<br/><br/>
-Your replacement QR code only needs to be scanned once. After it has been scanned successfully, you do not need to scan it again during the validity period of your concession.<br/><br/>
+Your replacement QR code only needs to be scanned once, when you first pay. After it has been scanned successfully, your payment covers the whole validity period of your concession, so you do not need to scan it again or pay again when you leave and return during that time.<br/><br/>
 Your concession is valid for ${duration}, from ${validFrom} to ${validExpiry}.<br/><br/>
 Please note that concession payments are <span style="color: #C00000; font-weight: bold;">non-refundable</span>.<br/><br/>
 If you continue to experience any issues or have any further queries, please contact: <a href="mailto:${NHS_SUPPORT_EMAIL}" style="color: #005EB8; text-decoration: underline;">${NHS_SUPPORT_EMAIL}</a><br/><br/>

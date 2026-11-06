@@ -60,7 +60,7 @@ import {
   safeParseDateToTimestamp,
   safeParseDMYToISO
 } from "../utils/csvParser";
-import { checkIsRecordDispatched, isRecordMatch, isPlaceholderVrm, getRecordPrimaryKey } from "../utils/dispatchUtils";
+import { checkIsRecordDispatched, isRecordMatch, isPlaceholderVrm, getRecordPrimaryKey, buildReplacementFormUpdate } from "../utils/dispatchUtils";
 import { isVrmSilentBlockedSync } from "../lib/blocklist";
 import { VoucherCodePicker } from "./VoucherCodePicker";
 // ⭐ FIX: Import canonical date & voucher matching functions from voucherValidation
@@ -746,22 +746,15 @@ function DispatchCentreComponent({
         ...currentRec,
         originalVoucherCode: originalVoucherCode || currentRec.originalVoucherCode,
         replacementCode: selectedCode,
+        voucherCodesText: selectedCode,
+        status: "Pending",
         isResend: true,
         emailType: "RESEND_CONCESSION",
         emailTemplate: "replacement"
       });
     }
 
-    onChangeFormData?.({
-      id: currentRec?.id,
-      formId: currentRec?.formId,
-      vrm: currentRec?.vrm,
-      originalVoucherCode: originalVoucherCode || undefined,
-      replacementCode: selectedCode,
-      isResend: true,
-      emailType: "RESEND_CONCESSION",
-      emailTemplate: "replacement"
-    } as any);
+    onChangeFormData?.(buildReplacementFormUpdate(currentRec, selectedCode) as any);
 
     setTimeout(() => {
       setIsReplacingCode(false);

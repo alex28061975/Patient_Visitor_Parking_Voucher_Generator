@@ -1,5 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import { autoCancelDuplicates, enrichRecordsWithVouchers } from '../App';
 import {
@@ -23,7 +25,7 @@ import {
   deriveDateRangeForEmail,
   CancellationReason
 } from '../utils/emailTemplateUtils';
-import { getRecordPrimaryKey, getRecordKeys } from '../utils/dispatchUtils';
+import { getRecordPrimaryKey, getRecordKeys, buildReplacementFormUpdate } from '../utils/dispatchUtils';
 import { computeVoucherBatchExpiryBadge, validateVoucherCSV, validateManualVoucherChange, isVoucherForPermitDateRange, getSelectableActiveDateCodes, buildAssignedCodeSet, cleanVoucherCodeValue, normalizeDateToISO } from '../utils/voucherValidation';
 
 function makePermit(overrides: Partial<CsvPermitRecord> & { id: string; vrm: string }): CsvPermitRecord {
@@ -1518,8 +1520,11 @@ CON_ERR_2,,`;
     assert.ok(email.plainText.includes('select Concession'));
     assert.ok(email.plainText.includes('AB12CDE'));
     assert.ok(email.plainText.includes('When prompted to scan a Blue Badge or concession'));
-    assert.ok(email.plainText.includes('Your replacement QR code only needs to be scanned once. After it has been scanned successfully, you do not need to scan it again during the validity period of your concession.'));
-    assert.ok(email.htmlText.includes('Your replacement QR code only needs to be scanned once. After it has been scanned successfully, you do not need to scan it again during the validity period of your concession.'));
+    const replacementNewPara = 'Your replacement QR code only needs to be scanned once, when you first pay. After it has been scanned successfully, your payment covers the whole validity period of your concession, so you do not need to scan it again or pay again when you leave and return during that time.';
+    assert.ok(email.plainText.includes(replacementNewPara));
+    assert.ok(email.htmlText.includes(replacementNewPara));
+    assert.equal(email.plainText.includes('no longer valid'), false);
+    assert.equal(email.htmlText.includes('no longer valid'), false);
     assert.ok(email.plainText.includes('Your concession is valid for 7 days, from 10/10/2026 to 16/10/2026.'));
     assert.ok(email.plainText.includes('concession payments are non-refundable.'));
     assert.ok(email.plainText.includes('parkingadminbh.bartshealth@nhs.net'));
@@ -1551,8 +1556,11 @@ CON_ERR_2,,`;
     assert.ok(email.plainText.includes('select Concession'));
     assert.ok(email.plainText.includes('AB12CDE'));
     assert.ok(email.plainText.includes('When prompted to scan a Blue Badge or concession'));
-    assert.ok(email.plainText.includes('Your QR code only needs to be scanned once. After it has been scanned successfully, you do not need to scan it again during the validity period of your concession.'));
-    assert.ok(email.htmlText.includes('Your QR code only needs to be scanned once. After it has been scanned successfully, you do not need to scan it again during the validity period of your concession.'));
+    const sendNewPara = 'Your QR code only needs to be scanned once, when you first pay. After it has been scanned successfully, your payment covers the whole validity period of your concession, so you do not need to scan it again or pay again when you leave and return during that time.';
+    assert.ok(email.plainText.includes(sendNewPara));
+    assert.ok(email.htmlText.includes(sendNewPara));
+    assert.equal(email.plainText.includes('no longer valid'), false);
+    assert.equal(email.htmlText.includes('no longer valid'), false);
     assert.ok(email.plainText.includes('Your concession is valid for 7 days, from 10/10/2026 to 16/10/2026.'));
     assert.ok(email.plainText.includes('concession payments are non-refundable.'));
     assert.ok(email.plainText.includes('parkingadminbh.bartshealth@nhs.net'));
@@ -2044,6 +2052,51 @@ CON_ERR_2,,`;
       originalVoucherCode: 'ORIG_CODE'
     } as CsvPermitRecord;
     assert.equal(getPreservedVoucher(mixedRec), 'CUR_CODE');
+  });
+
+  it('TEST: buildReplacementFormUpdate and enrichment healing with replacementCode', () => {
+    const rec: CsvPermitRecord = {
+      id: '99',
+      formId: '999',
+      vrm: 'TESTVRM',
+      hospital: 'Whipps Cross Hospital',
+      ward: 'Acorn Ward',
+      driverName: 'Test Driver',
+      dateRequired: '2026-10-01',
+      voucherCode: 'OLD_CODE',
+      originalVoucherCode: 'OLD_ORIG'
+    };
+    const update = buildReplacementFormUpdate(rec, 'NEW_REP_CODE');
+    assert.equal(update.replacementCode, 'NEW_REP_CODE');
+    assert.equal(update.voucherCodesText, 'NEW_REP_CODE');
+    assert.equal(update.status, 'Pending');
+    assert.equal(update.originalVoucherCode, 'OLD_ORIG');
+
+    const update2 = buildReplacementFormUpdate({ ...rec, originalVoucherCode: 'ORIG1', voucherCode: 'NEW_REP_CODE', replacementCode: 'NEW_REP_CODE' }, 'NEW_REP_CODE_2');
+    assert.equal(update2.originalVoucherCode, 'ORIG1');
+
+    const permitWithBrokenVoucher: CsvPermitRecord = {
+      id: '100',
+      formId: '1000',
+      vrm: 'HEALVRM',
+      hospital: 'Whipps Cross Hospital',
+      ward: 'Acorn Ward',
+      driverName: 'Test Driver',
+      dateRequired: '2026-10-01',
+      dateExpiry: '2026-10-07',
+      voucherCode: 'OLD_CODE',
+      replacementCode: 'NEW_REP_CODE'
+    };
+    const dbVouchers: ParsedVoucherData[] = normalizeVouchersList([
+      { code: 'NEW_REP_CODE', validFrom: '2026-10-01', validTo: '2026-10-07', status: 'available', isUsed: false }
+    ]);
+    const enriched = enrichRecordsWithVouchers([permitWithBrokenVoucher], dbVouchers, {}, '2026-10-01');
+    assert.equal(enriched[0].voucherCode, 'NEW_REP_CODE');
+
+    const dispatchSrc = fs.readFileSync(path.resolve(process.cwd(), 'src/components/DispatchCentre.tsx'), 'utf8');
+    const permitFormSrc = fs.readFileSync(path.resolve(process.cwd(), 'src/components/PermitForm.tsx'), 'utf8');
+    assert.ok(dispatchSrc.includes('buildReplacementFormUpdate'), 'DispatchCentre must call buildReplacementFormUpdate');
+    assert.ok(permitFormSrc.includes('buildReplacementFormUpdate'), 'PermitForm must call buildReplacementFormUpdate');
   });
 
 });
