@@ -19,7 +19,8 @@ import {
   batchCheckIsRecordDispatched,
   isRecordMatch,
   isPlaceholderVrm,
-  getNormalizedPermitKey
+  getNormalizedPermitKey,
+  resolveEditRecordStatus
 } from "./utils/dispatchUtils";
 
 // CSV Database Imports
@@ -2670,13 +2671,28 @@ export default function App() {
       return Boolean((recFormId && rFormId === recFormId) || (recId && rId === recId));
     }) || record;
 
+    const resolvedStatus = resolveEditRecordStatus(
+      target,
+      dispatchedKeysRef.current,
+      unsentKeysRef.current
+    );
+
+    const isDisp = checkIsRecordDispatched(
+      target,
+      target.vrm,
+      target.driverName,
+      target.dateRequired,
+      dispatchedKeysRef.current,
+      unsentKeysRef.current
+    );
+
     handleSelectRecord(target);
     const recordToEdit: CsvPermitRecord = {
       ...target,
       voucherCode: record.voucherCode || target.voucherCode,
       prePaidCode: record.prePaidCode || target.prePaidCode,
-      status: record.status || target.status,
-      isDispatched: record.isDispatched !== undefined ? record.isDispatched : target.isDispatched
+      status: resolvedStatus,
+      isDispatched: isDisp
     };
     setEditingRecord(recordToEdit);
     setEditingResolvedVoucherCode(resolvedCode || record.voucherCode || "");
@@ -3603,6 +3619,7 @@ export default function App() {
         database={enrichedDatabase}
         vouchersDatabase={vouchersDatabase}
         dispatchedKeys={dispatchedKeys}
+        unsentKeys={unsentKeys}
         onClose={() => {
           setIsEditModalOpen(false);
           setEditingRecord(null);

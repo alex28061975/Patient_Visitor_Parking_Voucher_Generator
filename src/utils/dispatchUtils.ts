@@ -600,3 +600,75 @@ export function buildReplacementFormUpdate(currentRec: any, selectedCode: string
   };
 }
 
+export type PermitStatusType = 'BLOCKED' | 'CANCELLED' | 'REPLACEMENT' | 'SENT' | 'PENDING';
+export type PermitActionLabel = 'Blocked' | 'Resend' | 'Unsend' | 'Send';
+
+/**
+ * Computes authoritative row status and action label from flag inputs
+ */
+export function getRowState({
+  isBlocked,
+  isCancelled,
+  isDispatched,
+  replacementPending
+}: {
+  isBlocked?: boolean;
+  isCancelled?: boolean;
+  isDispatched?: boolean;
+  replacementPending?: boolean;
+}): { status: PermitStatusType; actionLabel: PermitActionLabel } {
+  if (isBlocked) {
+    return { status: 'BLOCKED', actionLabel: 'Blocked' };
+  }
+  if (isCancelled) {
+    return { status: 'CANCELLED', actionLabel: isDispatched ? 'Unsend' : 'Send' };
+  }
+  if (replacementPending) {
+    return { status: 'REPLACEMENT', actionLabel: 'Resend' };
+  }
+  if (isDispatched) {
+    return { status: 'SENT', actionLabel: 'Unsend' };
+  }
+  return { status: 'PENDING', actionLabel: 'Send' };
+}
+
+/**
+ * Resolves authoritative status for Edit Record workflow with strict explicit UNSEND precedence over dispatched status
+ */
+export function resolveEditRecordStatus(
+  record?: CsvPermitRecord | any | null,
+  dispatchedKeys?: string[] | Set<string>,
+  unsentKeys?: string[] | Set<string>
+): string {
+  if (!record) return "PENDING";
+  const recordKeys = getRecordKeys(record);
+  const unsentSet = unsentKeys ? (Array.isArray(unsentKeys) ? new Set(unsentKeys) : unsentKeys) : new Set<string>();
+  const isExplicitlyUnsent = recordKeys.some(k => unsentSet.has(k));
+
+  const isDisp = checkIsRecordDispatched(
+    record,
+    record.vrm,
+    record.driverName,
+    record.dateRequired,
+    dispatchedKeys,
+    unsentKeys
+  );
+
+  // FIRST: If explicitly present in unsentKeys, status must be UNSENT
+  if (isExplicitlyUnsent) {
+    return "UNSENT";
+  }
+  // SECOND: Otherwise, if checkIsRecordDispatched confirms dispatched, status must be SENT
+  if (isDisp) {
+    return "SENT";
+  }
+  // THIRD: Normaliser returning exactly one of "PENDING" | "SENT" | "UNSENT" | "CANCELLED"
+  const sUpper = String(record.status ?? "").trim().toUpperCase();
+  if (sUpper === "CANCELLED" || record.isCancelled === true) return "CANCELLED";
+  if (sUpper === "UNSENT") return "UNSENT";
+  if (sUpper === "SENT" || sUpper === "DISPATCHED" || record.isDispatched === true) return "SENT";
+  return "PENDING";
+}
+
+
+

@@ -60,7 +60,7 @@ import {
   safeParseDateToTimestamp,
   safeParseDMYToISO
 } from "../utils/csvParser";
-import { checkIsRecordDispatched, isRecordMatch, isPlaceholderVrm, getRecordPrimaryKey, buildReplacementFormUpdate } from "../utils/dispatchUtils";
+import { checkIsRecordDispatched, isRecordMatch, isPlaceholderVrm, getRecordPrimaryKey, buildReplacementFormUpdate, getRowState } from "../utils/dispatchUtils";
 import { isVrmSilentBlockedSync } from "../lib/blocklist";
 import { VoucherCodePicker } from "./VoucherCodePicker";
 // ⭐ FIX: Import canonical date & voucher matching functions from voucherValidation
@@ -296,10 +296,10 @@ function DispatchCentreComponent({
           return {
             ...prev,
             ...updated,
-            replacementCode: isDisp ? undefined : (updated.replacementCode !== undefined ? updated.replacementCode : prev.replacementCode),
-            isResend: isDisp ? false : (updated.isResend !== undefined ? updated.isResend : prev.isResend),
-            emailType: isDisp ? undefined : (updated.emailType !== undefined ? updated.emailType : prev.emailType),
-            emailTemplate: isDisp ? undefined : (updated.emailTemplate !== undefined ? updated.emailTemplate : prev.emailTemplate)
+            replacementCode: updated.replacementCode !== undefined ? updated.replacementCode : prev.replacementCode,
+            isResend: updated.isResend !== undefined ? updated.isResend : prev.isResend,
+            emailType: updated.emailType !== undefined ? updated.emailType : prev.emailType,
+            emailTemplate: updated.emailTemplate !== undefined ? updated.emailTemplate : prev.emailTemplate
           };
         });
       }
@@ -581,10 +581,10 @@ function DispatchCentreComponent({
         const isDisp = checkIsRecordDispatched(updated, updated.vrm, updated.driverName, updated.dateRequired, dispatchedKeysSet, unsentKeysSet);
         return {
           ...updated,
-          replacementCode: isDisp ? undefined : (updated.replacementCode !== undefined ? updated.replacementCode : selectedRowRecord.replacementCode),
-          isResend: isDisp ? false : (updated.isResend !== undefined ? updated.isResend : selectedRowRecord.isResend),
-          emailType: isDisp ? undefined : (updated.emailType !== undefined ? updated.emailType : selectedRowRecord.emailType),
-          emailTemplate: isDisp ? undefined : (updated.emailTemplate !== undefined ? updated.emailTemplate : selectedRowRecord.emailTemplate)
+          replacementCode: updated.replacementCode !== undefined ? updated.replacementCode : selectedRowRecord.replacementCode,
+          isResend: updated.isResend !== undefined ? updated.isResend : selectedRowRecord.isResend,
+          emailType: updated.emailType !== undefined ? updated.emailType : selectedRowRecord.emailType,
+          emailTemplate: updated.emailTemplate !== undefined ? updated.emailTemplate : selectedRowRecord.emailTemplate
         };
       }
       return selectedRowRecord;
@@ -807,36 +807,54 @@ function DispatchCentreComponent({
   const isReplacementPending = useCallback((record: CsvPermitRecord) => {
     if (!record) return false;
     const isDisp = checkIsRecordDispatched(record, record.vrm, record.driverName, record.dateRequired, dispatchedKeysSet, unsentKeysSet);
-    // If the record has been dispatched and doesn't have an unapplied new replacement code, it is NOT pending
-    if (isDisp && !record.replacementCode) {
+
+    // Check if formData / selectedRowRecord replacement has already been applied to the record's voucher code
+    const formRepCode = formData?.replacementCode || formData?.voucherCodesText;
+    const hasFormRep = formData && isRecordMatch(record, formData) && (
+      Boolean(formRepCode) ||
+      formData?.emailType === "RESEND_CONCESSION" ||
+      formData?.emailTemplate === "replacement" ||
+      formData?.isResend === true
+    );
+    const resolvedFormRepCode = hasFormRep ? (formRepCode || (formData?.isResend ? record.replacementCode : "")) : "";
+    const isFormRepApplied = resolvedFormRepCode && (
+      record.voucherCode?.toUpperCase() === resolvedFormRepCode.toUpperCase() ||
+      record.prePaidCode?.toUpperCase() === resolvedFormRepCode.toUpperCase()
+    );
+
+    const selRepCode = selectedRowRecord?.replacementCode;
+    const hasSelRep = selectedRowRecord && isRecordMatch(record, selectedRowRecord) && (
+      Boolean(selRepCode) ||
+      selectedRowRecord?.emailType === "RESEND_CONCESSION" ||
+      selectedRowRecord?.emailTemplate === "replacement" ||
+      selectedRowRecord?.isResend === true
+    );
+    const resolvedSelRepCode = hasSelRep ? (selRepCode || (selectedRowRecord?.isResend ? record.replacementCode : "")) : "";
+    const isSelRepApplied = resolvedSelRepCode && (
+      record.voucherCode?.toUpperCase() === resolvedSelRepCode.toUpperCase() ||
+      record.prePaidCode?.toUpperCase() === resolvedSelRepCode.toUpperCase()
+    );
+
+    // If replacement was already applied (completed resend), it is NOT pending even if stale formData/selectedRowRecord remains
+    if (isFormRepApplied || isSelRepApplied) {
       return false;
     }
-    if (
-      Boolean(record.replacementCode) ||
-      record.emailType === "RESEND_CONCESSION" ||
-      (record.isResend === true && !isDisp) ||
-      record.emailTemplate === "replacement"
-    ) {
+
+    // If the database record itself has replacement state
+    if (Boolean(record.replacementCode) || record.emailType === "RESEND_CONCESSION" || record.emailTemplate === "replacement" || (record.isResend === true && !isDisp)) {
       return true;
     }
-    if (selectedRowRecord && isRecordMatch(record, selectedRowRecord)) {
-      return (
-        Boolean(selectedRowRecord.replacementCode) ||
-        selectedRowRecord.emailType === "RESEND_CONCESSION" ||
-        (selectedRowRecord.isResend === true && !isDisp) ||
-        selectedRowRecord.emailTemplate === "replacement"
-      );
-    }
-    if (
-      formData &&
-      isRecordMatch(record, formData) &&
-      (formData?.emailType === "RESEND_CONCESSION" ||
-        (formData?.isResend === true && !isDisp) ||
-        formData?.emailTemplate === "replacement" ||
-        Boolean(formData?.replacementCode))
-    ) {
+
+    // If formData or selectedRowRecord has a genuine unapplied replacement
+    if ((hasFormRep && !isFormRepApplied) || (hasSelRep && !isSelRepApplied)) {
       return true;
     }
+
+    // If dispatched and no replacement code anywhere unapplied
+    if (isDisp && !record.replacementCode && !hasFormRep && !hasSelRep) {
+      return false;
+    }
+
     return false;
   }, [dispatchedKeysSet, unsentKeysSet, selectedRowRecord, formData]);
 
@@ -930,9 +948,7 @@ function DispatchCentreComponent({
     if (isVrmSilentBlockedSync(record.vrm)) return "BLOCKED";
     if (getIsCancelled(record, idx)) return "CANCELLED";
     const isDispatched = checkIsRecordDispatched(record, record.vrm, record.driverName, record.dateRequired, dispatchedKeysSet, unsentKeysSet);
-    if (isDispatched) return "SENT";
-    if (isReplacementPending(record)) return "REPLACEMENT";
-    return "PENDING";
+    return getRowState({ isBlocked: false, isCancelled: false, isDispatched, replacementPending: isReplacementPending(record) }).status;
   }, [getIsCancelled, dispatchedKeysSet, unsentKeysSet, isReplacementPending]);
 
   // Dynamic stock cache keyed by date range, automatically invalidated when assigned codes or vouchers change
@@ -2085,7 +2101,7 @@ function DispatchCentreComponent({
 
                 const isDispatched = checkIsRecordDispatched(record, record?.vrm, record?.driverName, record?.dateRequired, dispatchedKeysSet, unsentKeysSet);
                 const isDisp = isDispatched;
-                const replacementPending = !isBlocked && !isDisp && isReplacementPending(record);
+                const replacementPending = !isBlocked && !isCancelled && isReplacementPending(record);
                 const recordPk = getRecordPrimaryKey(record) || record?.vrm || String(record?.id || "");
                 const cleanVrmKey = record?.vrm ? record.vrm.toUpperCase().replace(/\s+/g, "") : "";
                 const trackInfo = emailTracking?.[recordPk] || (cleanVrmKey ? emailTracking?.[cleanVrmKey] : undefined) || (record?.formId ? emailTracking?.[String(record.formId)] : undefined);
@@ -2303,6 +2319,11 @@ function DispatchCentreComponent({
                         <span className="border border-red-300 dark:border-red-800/60 bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-400 font-bold px-2 py-0.5 rounded text-[9px] tracking-wider uppercase inline-flex items-center justify-center whitespace-nowrap">
                           CANCELLED
                         </span>
+                      ) : replacementPending ? (
+                        <span className="border border-amber-400 dark:border-amber-500/60 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 font-bold px-2 py-0.5 rounded text-[9px] tracking-wider uppercase inline-flex items-center justify-center gap-1.5 whitespace-nowrap animate-pulse">
+                          <span className="inline-block animate-spin text-[9px]">⟳</span>
+                          REPLACEMENT
+                        </span>
                       ) : isDispatched ? (
                         <span 
                           title={trackInfo?.sentAt ? `Dispatched & sent: ${new Date(trackInfo.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : "Dispatched"}
@@ -2310,11 +2331,6 @@ function DispatchCentreComponent({
                         >
                           <span>✅</span>
                           <span>SENT</span>
-                        </span>
-                      ) : replacementPending ? (
-                        <span className="border border-amber-400 dark:border-amber-500/60 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 font-bold px-2 py-0.5 rounded text-[9px] tracking-wider uppercase inline-flex items-center justify-center gap-1.5 whitespace-nowrap animate-pulse">
-                          <span className="inline-block animate-spin text-[9px]">⟳</span>
-                          REPLACEMENT
                         </span>
                       ) : (
                         <span className="border border-amber-300 dark:border-[#FF9F0A]/40 bg-amber-50 dark:bg-[#FF9F0A]/15 text-amber-700 dark:text-[#FF9F0A] font-bold px-2 py-0.5 rounded text-[9px] tracking-wider uppercase inline-flex items-center justify-center whitespace-nowrap">
@@ -2403,7 +2419,7 @@ function DispatchCentreComponent({
                                       <Mail className="w-2.5 h-2.5" />
                                     )
                                   )}
-                                  <span>{isBlocked ? "Blocked" : (replacementPending ? "Resend" : (isDispatched ? "Unsend" : "Send"))}</span>
+                                  <span>{getRowState({ isBlocked, isCancelled, isDispatched, replacementPending }).actionLabel}</span>
                                 </button>
                                 <button 
                                   type="button" 

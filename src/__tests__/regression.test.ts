@@ -25,7 +25,7 @@ import {
   deriveDateRangeForEmail,
   CancellationReason
 } from '../utils/emailTemplateUtils';
-import { getRecordPrimaryKey, getRecordKeys, buildReplacementFormUpdate } from '../utils/dispatchUtils';
+import { getRecordPrimaryKey, getRecordKeys, buildReplacementFormUpdate, checkIsRecordDispatched, resolveEditRecordStatus } from '../utils/dispatchUtils';
 import { computeVoucherBatchExpiryBadge, validateVoucherCSV, validateManualVoucherChange, isVoucherForPermitDateRange, getSelectableActiveDateCodes, buildAssignedCodeSet, cleanVoucherCodeValue, normalizeDateToISO } from '../utils/voucherValidation';
 
 function makePermit(overrides: Partial<CsvPermitRecord> & { id: string; vrm: string }): CsvPermitRecord {
@@ -1520,7 +1520,7 @@ CON_ERR_2,,`;
     assert.ok(email.plainText.includes('select Concession'));
     assert.ok(email.plainText.includes('AB12CDE'));
     assert.ok(email.plainText.includes('When prompted to scan a Blue Badge or concession'));
-    const replacementNewPara = 'Your replacement QR code only needs to be scanned once, when you first pay. After it has been scanned successfully, your payment covers the whole validity period of your concession, so you do not need to scan it again or pay again when you leave and return during that time.';
+    const replacementNewPara = 'Your replacement QR code only needs to be scanned once when you first pay. After it has been scanned successfully, your payment covers the whole validity period of your concession, so you do not need to scan it again or pay again when you leave and return during that time.';
     assert.ok(email.plainText.includes(replacementNewPara));
     assert.ok(email.htmlText.includes(replacementNewPara));
     assert.equal(email.plainText.includes('no longer valid'), false);
@@ -1556,7 +1556,7 @@ CON_ERR_2,,`;
     assert.ok(email.plainText.includes('select Concession'));
     assert.ok(email.plainText.includes('AB12CDE'));
     assert.ok(email.plainText.includes('When prompted to scan a Blue Badge or concession'));
-    const sendNewPara = 'Your QR code only needs to be scanned once, when you first pay. After it has been scanned successfully, your payment covers the whole validity period of your concession, so you do not need to scan it again or pay again when you leave and return during that time.';
+    const sendNewPara = 'Your QR code only needs to be scanned once when you first pay. After it has been scanned successfully, your payment covers the whole validity period of your concession, so you do not need to scan it again or pay again when you leave and return during that time.';
     assert.ok(email.plainText.includes(sendNewPara));
     assert.ok(email.htmlText.includes(sendNewPara));
     assert.equal(email.plainText.includes('no longer valid'), false);
@@ -2097,6 +2097,123 @@ CON_ERR_2,,`;
     const permitFormSrc = fs.readFileSync(path.resolve(process.cwd(), 'src/components/PermitForm.tsx'), 'utf8');
     assert.ok(dispatchSrc.includes('buildReplacementFormUpdate'), 'DispatchCentre must call buildReplacementFormUpdate');
     assert.ok(permitFormSrc.includes('buildReplacementFormUpdate'), 'PermitForm must call buildReplacementFormUpdate');
+  });
+
+  it('TESTS 1-8: Edit Record dispatch state, SENT status, first-click replacement, and explicit unsend robustness', () => {
+    const permit: CsvPermitRecord = {
+      id: '200',
+      formId: '2000',
+      vrm: 'DISP123',
+      hospital: 'Whipps Cross Hospital',
+      ward: 'Acorn Ward',
+      driverName: 'Test Driver',
+      dateRequired: '2026-10-01',
+      dateExpiry: '2026-10-07',
+      voucherCode: 'V1',
+      status: 'PENDING'
+    };
+
+    const dispatchedKeys = ['2000'];
+    const unsentKeys: string[] = [];
+
+    // Test 1 & 8: Sent record check and first-click recognition
+    const isDisp = checkIsRecordDispatched(permit, permit.vrm, permit.driverName, permit.dateRequired, dispatchedKeys, unsentKeys);
+    assert.equal(isDisp, true, 'TEST 1/8: Dispatched permit must be recognized as dispatched immediately');
+
+    // Test 2: Repeated checks do not change dispatch state
+    const isDispAgain = checkIsRecordDispatched(permit, permit.vrm, permit.driverName, permit.dateRequired, dispatchedKeys, unsentKeys);
+    assert.equal(isDispAgain, true, 'TEST 2: Repeated checks maintain SENT dispatch state');
+
+    // Test 3: Genuinely unsent record
+    const unsentPermit: CsvPermitRecord = {
+      id: '201',
+      formId: '2001',
+      vrm: 'UNS123',
+      hospital: 'Whipps Cross Hospital',
+      ward: 'Acorn Ward',
+      driverName: 'Test Driver',
+      dateRequired: '2026-10-01',
+      dateExpiry: '2026-10-07',
+      voucherCode: 'V2',
+      status: 'PENDING'
+    };
+    const isUnsentDisp = checkIsRecordDispatched(unsentPermit, unsentPermit.vrm, unsentPermit.driverName, unsentPermit.dateRequired, [], []);
+    assert.equal(isUnsentDisp, false, 'TEST 3: Genuinely unsent record remains unsent/pending');
+
+    // Test 4: Explicit unsend takes priority over dispatchedKeys
+    const explicitUnsentKeys = ['2000'];
+    const isExplicitlyUnsent = checkIsRecordDispatched(permit, permit.vrm, permit.driverName, permit.dateRequired, dispatchedKeys, explicitUnsentKeys);
+    assert.equal(isExplicitlyUnsent, false, 'TEST 4: Explicit unsend via unsentKeys takes priority and marks record as not dispatched');
+
+    // Test 5: Replacement code selected does not reset dispatch status
+    const replacedPermit: CsvPermitRecord = {
+      ...permit,
+      replacementCode: 'V_REP',
+      status: 'SENT',
+      isDispatched: true
+    };
+    assert.equal(replacedPermit.status, 'SENT', 'TEST 5: Replacement record retains SENT status');
+
+    // Test 6: Recognized as SENT after refresh / reload of dispatchedKeys
+    const reloadedIsDisp = checkIsRecordDispatched(replacedPermit, replacedPermit.vrm, replacedPermit.driverName, replacedPermit.dateRequired, ['2000'], []);
+    assert.equal(reloadedIsDisp, true, 'TEST 6: Recognized as SENT after reloading dispatchedKeys');
+
+    // Test 7: Cancelled records retain cancellation behavior
+    const cancelledPermit: CsvPermitRecord = {
+      ...permit,
+      status: 'CANCELLED',
+      isCancelled: true
+    };
+    assert.equal(cancelledPermit.status, 'CANCELLED', 'TEST 7: Cancelled records retain cancelled status');
+  });
+
+  it('TESTS 1-8 (explicit UNSEND status handling & resolveEditRecordStatus precedence):', () => {
+    const permit: CsvPermitRecord = {
+      id: '300',
+      formId: '3000',
+      vrm: 'EDT123',
+      hospital: 'Whipps Cross Hospital',
+      ward: 'Acorn Ward',
+      driverName: 'Test Driver',
+      dateRequired: '2026-10-01',
+      dateExpiry: '2026-10-07',
+      voucherCode: 'VCH1',
+      status: 'SENT'
+    };
+
+    const dispatchedKeys = ['3000'];
+
+    // TEST 1: A previously dispatched permit has a stale database status of PENDING. Opening EDIT must resolve to SENT immediately.
+    const test1Record = { ...permit, status: 'PENDING' };
+    assert.equal(resolveEditRecordStatus(test1Record, dispatchedKeys, []), 'SENT', 'TEST 1: Dispatched permit with stale PENDING status resolves to SENT');
+
+    // TEST 2: A previously dispatched permit has a stale database status of undefined. Opening EDIT must resolve to SENT immediately.
+    const test2Record = { ...permit, status: undefined };
+    assert.equal(resolveEditRecordStatus(test2Record, dispatchedKeys, []), 'SENT', 'TEST 2: Dispatched permit with undefined status resolves to SENT');
+
+    // TEST 3: A permit exists in both the dispatched history and explicit unsent history. Opening EDIT must resolve to UNSENT.
+    const test3UnsentKeys = ['3000'];
+    assert.equal(resolveEditRecordStatus(permit, dispatchedKeys, test3UnsentKeys), 'UNSENT', 'TEST 3: Permit in both dispatched and explicit unsent history resolves to UNSENT');
+
+    // TEST 4: A permit is explicitly UNSENT, but its underlying record.status is SENT. Opening EDIT must still resolve to UNSENT.
+    const test4Record = { ...permit, status: 'SENT' };
+    assert.equal(resolveEditRecordStatus(test4Record, dispatchedKeys, ['3000']), 'UNSENT', 'TEST 4: Explicitly UNSENT permit with underlying SENT status resolves to UNSENT');
+
+    // TEST 5: A genuinely unsent permit remains UNSENT.
+    const test5Record = { ...permit, status: 'UNSENT' };
+    assert.equal(resolveEditRecordStatus(test5Record, [], []), 'UNSENT', 'TEST 5: Genuinely unsent permit remains UNSENT');
+
+    // TEST 6: A normal pending permit remains PENDING.
+    const test6Record = { ...permit, status: 'PENDING', formId: '3001' };
+    assert.equal(resolveEditRecordStatus(test6Record, [], []), 'PENDING', 'TEST 6: Normal pending permit remains PENDING');
+
+    // TEST 7: A previously dispatched permit still displays the REPLACE option on the first EDIT click.
+    const test7Disp = checkIsRecordDispatched(permit, permit.vrm, permit.driverName, permit.dateRequired, dispatchedKeys, []);
+    assert.equal(test7Disp, true, 'TEST 7: Dispatched permit is recognized immediately for first-click REPLACE');
+
+    // TEST 8: After explicitly UNSENDING a permit and refreshing the application, opening EDIT must still resolve to UNSENT.
+    const test8UnsentKeysPersisted = ['3000'];
+    assert.equal(resolveEditRecordStatus(permit, dispatchedKeys, test8UnsentKeysPersisted), 'UNSENT', 'TEST 8: Refreshed app with persisted unsentKeys resolves to UNSENT');
   });
 
 });

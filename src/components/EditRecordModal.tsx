@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { X, Check, Calendar, Car, User, Phone, Mail, Building2, MapPin, Tag } from "lucide-react";
 import { 
   CsvPermitRecord, 
@@ -13,6 +13,7 @@ import {
 import { isVrmSilentBlockedSync } from "../lib/blocklist";
 import { isVoucherForPermitDateRange, cleanVoucherCodeValue, validateManualVoucherChange, getSelectableActiveDateCodes, buildAssignedCodeSet } from "../utils/voucherValidation";
 import { HOSPITAL_SITES } from "../types";
+import { checkIsRecordDispatched, resolveEditRecordStatus } from "../utils/dispatchUtils";
 
 interface EditRecordModalProps {
   isOpen: boolean;
@@ -20,6 +21,7 @@ interface EditRecordModalProps {
   database: CsvPermitRecord[];
   vouchersDatabase: ParsedVoucherData[];
   dispatchedKeys?: string[] | Set<string>;
+  unsentKeys?: string[] | Set<string>;
   onClose: () => void;
   onSave: (updatedRecord: CsvPermitRecord) => void | Promise<any>;
   resolvedVoucherCode?: string;
@@ -32,6 +34,7 @@ function EditRecordModalComponent({
   database,
   vouchersDatabase,
   dispatchedKeys,
+  unsentKeys,
   onClose,
   onSave,
   resolvedVoucherCode,
@@ -48,6 +51,8 @@ function EditRecordModalComponent({
   const [formVoucherCode, setFormVoucherCode] = useState("");
   const [formReplacementCode, setFormReplacementCode] = useState("");
   const [formStatus, setFormStatus] = useState("PENDING");
+  const dispatchKeysRef = useRef({ dispatchedKeys, unsentKeys });
+  dispatchKeysRef.current = { dispatchedKeys, unsentKeys };
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isReplacingCode, setIsReplacingCode] = useState(false);
@@ -282,18 +287,19 @@ function EditRecordModalComponent({
       setFormVoucherCode(displayVoucherCode);
       setFormReplacementCode(record.replacementCode || "");
 
+      const resolvedModalStatus = resolveEditRecordStatus(
+        record,
+        dispatchKeysRef.current.dispatchedKeys,
+        dispatchKeysRef.current.unsentKeys
+      );
+
       let initialStatus = "PENDING";
       if (isCancelled) {
         initialStatus = "CANCELLED";
       } else if (record.isCancelled || (record.status && record.status.toUpperCase() === "CANCELLED")) {
         initialStatus = "CANCELLED";
-      } else if (record.isDispatched || (record.status && (record.status.toUpperCase() === "SENT" || record.status.toUpperCase() === "DISPATCHED"))) {
-        initialStatus = "SENT";
-      } else if (record.status) {
-        const sUpper = record.status.toUpperCase();
-        if (sUpper === "UNSENT") initialStatus = "UNSENT";
-        else if (sUpper === "CANCELLED") initialStatus = "CANCELLED";
-        else initialStatus = "PENDING";
+      } else {
+        initialStatus = resolvedModalStatus;
       }
       setFormStatus(initialStatus);
     }
