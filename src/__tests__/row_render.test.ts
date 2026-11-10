@@ -97,6 +97,14 @@ describe('DispatchCentre Row Render & Replacement Lock Test Suite (row_render.te
           unsentKeys: [],
           dateRangeFilter: 'all',
           processingDate: '2026-11-04',
+          formData: {
+            id: '1',
+            formId: '100',
+            vrm: 'AB12CDE',
+            replacementCode: 'REP_CODE_1',
+            isResend: true,
+            emailTemplate: 'replacement'
+          },
           onSelectRecord: () => {},
           onSendRecord: mockOnSendRecord,
           onResendRecord: mockOnResendRecord,
@@ -152,6 +160,14 @@ describe('DispatchCentre Row Render & Replacement Lock Test Suite (row_render.te
           unsentKeys: keys,
           dateRangeFilter: 'all',
           processingDate: '2026-11-04',
+          formData: {
+            id: '1',
+            formId: '100',
+            vrm: 'AB12CDE',
+            replacementCode: 'REP_CODE_2',
+            isResend: true,
+            emailTemplate: 'replacement'
+          },
           onSelectRecord: () => {},
           onResendRecord: () => {},
           onUnsendRecord: () => {}
@@ -240,6 +256,14 @@ describe('DispatchCentre Row Render & Replacement Lock Test Suite (row_render.te
           unsentKeys: [],
           dateRangeFilter: 'all',
           processingDate: '2026-11-04',
+          formData: {
+            id: '1',
+            formId: '100',
+            vrm: 'AB12CDE',
+            replacementCode: 'REP_CODE_3',
+            isResend: true,
+            emailTemplate: 'replacement'
+          },
           onSelectRecord: () => {},
           onResendRecord: mockOnResendRecord,
           onUnsendRecord: () => {}

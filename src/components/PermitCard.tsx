@@ -515,94 +515,12 @@ function PermitCardInner({
   const [toastType, setToastType] = useState<string>("info");
   const [emailTemplate, setEmailTemplate] = useState<"new" | "replacement">("new");
 
-  // Track voucher code changes to automatically switch to Replacement template
-  const prevRecordIdentityRef = useRef<string>("");
-  const prevVoucherCodeRef = useRef<string | undefined>(data.voucherCodesText);
-  
+  // Replacement mode is initiated only by the explicit Choose a code or EDIT
+  // workflows, which set data.replacementCode. Row selection, code comparisons
+  // and historical email flags must never create replacement mode.
   useEffect(() => {
-    const currentIdentity = `${data.vrm || ""}_${data.name || ""}_${data.validFrom || ""}_${data.id || data.formId || ""}`;
-    const isNewRecordLoaded = prevRecordIdentityRef.current !== currentIdentity;
-    
-    if (isNewRecordLoaded) {
-      prevRecordIdentityRef.current = currentIdentity;
-      prevVoucherCodeRef.current = data.voucherCodesText;
-      
-      const isRecordAlreadyDispatched = Boolean(
-        isCurrentDispatched ||
-        data.status === "SENT" ||
-        data.isDispatched === true
-      );
-
-      const hasReplacementFlags = Boolean(
-        data.replacementCode ||
-        data.isResend ||
-        data.emailType === "RESEND_CONCESSION" ||
-        data.emailTemplate === "replacement" ||
-        (isRecordAlreadyDispatched && data.originalVoucherCode && data.voucherCodesText && cleanVoucherCodeValue(data.voucherCodesText) !== cleanVoucherCodeValue(data.originalVoucherCode))
-      );
-
-      if (hasReplacementFlags) {
-        setEmailTemplate("replacement");
-      } else {
-        const isPending = !isCurrentDispatched || data.status === "Pending" || !data.isDispatched;
-        if (isPending) {
-          setEmailTemplate("new");
-          if (data.isResend || data.emailType === "RESEND_CONCESSION" || data.emailTemplate === "replacement") {
-            onChange?.({
-              isResend: false,
-              emailType: "SEND_CONCESSION",
-              emailTemplate: "new"
-            });
-          }
-        } else {
-          if (data.emailTemplate) {
-            setEmailTemplate(data.emailTemplate);
-          } else if (data.emailType === "RESEND_CONCESSION" || data.isResend) {
-            setEmailTemplate("replacement");
-          } else {
-            setEmailTemplate("replacement");
-          }
-        }
-      }
-      return;
-    }
-
-    // Explicit email template/type update from form or parent
-    if (data.emailTemplate === "replacement" || data.emailType === "RESEND_CONCESSION" || data.isResend) {
-      setEmailTemplate("replacement");
-    } else if (data.emailTemplate === "new" || data.emailType === "SEND_CONCESSION") {
-      setEmailTemplate("new");
-    }
-
-    // If an operator actively selects a new voucher code from "Active Date Codes"
-    // or updates the voucher code, switch to the replacement template only if the
-    // permit was previously dispatched. A never-dispatched permit getting a new or
-    // changed code is its first-ever send, not a replacement.
-    const prevWasRealCode = Boolean(
-      prevVoucherCodeRef.current &&
-      prevVoucherCodeRef.current !== "-" &&
-      prevVoucherCodeRef.current !== "CANCELLED" &&
-      prevVoucherCodeRef.current !== "Cancelled"
-    );
-    if (
-      isCurrentDispatched &&
-      prevWasRealCode &&
-      prevVoucherCodeRef.current !== data.voucherCodesText &&
-      data.voucherCodesText &&
-      data.voucherCodesText !== "-" &&
-      data.voucherCodesText !== "CANCELLED" &&
-      data.voucherCodesText !== "Cancelled"
-    ) {
-      setEmailTemplate("replacement");
-      onChange?.({
-        replacementCode: data.voucherCodesText,
-        emailTemplate: "replacement",
-        emailType: "RESEND_CONCESSION",
-        isResend: true
-      });
-    }
-    prevVoucherCodeRef.current = data.voucherCodesText;
-  }, [data.voucherCodesText, data.vrm, data.name, data.validFrom, data.id, data.formId, isCurrentDispatched, data.emailTemplate, data.emailType, data.isResend, data.status, data.isDispatched]);
+    setEmailTemplate(data.replacementCode ? "replacement" : "new");
+  }, [data.replacementCode]);
 
   const isCancelled = useMemo(() => {
     if (data.cancellationReason === "MANUAL" || data.cancellationReason === "BLOCKLIST") return true;
@@ -681,47 +599,10 @@ function PermitCardInner({
   }, [data, database, refSubDate]);
 
   const isReplacement = useMemo(() => {
-    // 0. Explicit resend / replacement markers on form data
-    if (
-      Boolean(data.replacementCode) ||
-      data.emailType === "RESEND_CONCESSION" ||
-      data.isResend ||
-      data.emailTemplate === "replacement"
-    ) return true;
-    // 1. If the template was explicitly set/selected to replacement
-    if (emailTemplate === "replacement") return true;
-    // For never-dispatched permits, only explicit replacement above applies.
-    // An unsent permit getting an assigned or updated code must not be treated as replacement.
-    if (!isCurrentDispatched && data.status !== "SENT" && !data.isDispatched) {
-      return false;
-    }
-    // 2. If voucher code has been updated or changed on an existing/dispatched record
-    if (isCurrentDispatched && isVoucherChangedOnSent) return true;
-    // 3. If original voucher code exists and differs from current code on dispatched record
-    if (isCurrentDispatched && originalVoucherCode && currentSelectedCode && cleanVoucherCodeValue(currentSelectedCode) !== cleanVoucherCodeValue(originalVoucherCode)) {
-      return true;
-    }
-    // 4. If any voucher code modification happened on an existing dispatched entry
-    if (isCurrentDispatched && currentSelectedCode && currentSelectedCode !== "-" && currentSelectedCode !== "CANCELLED") {
-      const dispatchedCode = (lastDispatchedCodeMap[recordKeyStr] ?? "").trim().toUpperCase();
-      if (dispatchedCode && currentSelectedCode !== dispatchedCode) {
-        return true;
-      }
-    }
-    // 5. If a PREVIOUSLY DISPATCHED record had an assigned code in the database
-    // and the current code differs, that's a genuine replacement. Gated by
-    // isCurrentDispatched like checks #2/#3 above - without that gate, this
-    // would also fire on a never-sent record purely because the database's
-    // independently-computed auto-assigned code and this card's own
-    // auto-assigned code picked different (but equally unsent) codes from the
-    // same pool, which is not a replacement.
-    const matchedRec = activeIndex !== -1 ? matchingPermits[activeIndex] : (database?.find(r => (data.formId && (r.formId === data.formId || r.id === data.formId))));
-    const initialDbCode = (matchedRec?.voucherCode || matchedRec?.prePaidCode || matchedRec?.voucherCodesText || "").trim().toUpperCase();
-    if (isCurrentDispatched && initialDbCode && initialDbCode !== "-" && initialDbCode !== "CANCELLED" && currentSelectedCode && currentSelectedCode !== initialDbCode) {
-      return true;
-    }
-    return false;
-  }, [data.replacementCode, data.emailType, data.isResend, data.emailTemplate, emailTemplate, isCurrentDispatched, data.status, data.isDispatched, isVoucherChangedOnSent, originalVoucherCode, currentSelectedCode, lastDispatchedCodeMap, recordKeyStr, activeIndex, matchingPermits, database, data.formId]);
+    // Only Choose a code / EDIT can set replacementCode. Historical flags,
+    // code comparisons and row selection must never infer replacement mode.
+    return Boolean(data.replacementCode);
+  }, [data.replacementCode]);
 
   const getEmailContent = useCallback((template: "new" | "replacement") => {
     const isRecordAlreadyDispatched = Boolean(

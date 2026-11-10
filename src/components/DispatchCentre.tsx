@@ -307,7 +307,13 @@ function DispatchCentreComponent({
   }, [database, dispatchedKeysSet, unsentKeysSet]);
 
   const handleRowClick = (record: CsvPermitRecord) => {
-    setSelectedRowRecord(record);
+    setSelectedRowRecord({
+      ...record,
+      replacementCode: undefined,
+      isResend: false,
+      emailType: undefined,
+      emailTemplate: undefined
+    });
     onSelectRecord(record);
   };
 
@@ -806,57 +812,35 @@ function DispatchCentreComponent({
 
   const isReplacementPending = useCallback((record: CsvPermitRecord) => {
     if (!record) return false;
-    const isDisp = checkIsRecordDispatched(record, record.vrm, record.driverName, record.dateRequired, dispatchedKeysSet, unsentKeysSet);
 
-    // Check if formData / selectedRowRecord replacement has already been applied to the record's voucher code
-    const formRepCode = formData?.replacementCode || formData?.voucherCodesText;
-    const hasFormRep = formData && isRecordMatch(record, formData) && (
-      Boolean(formRepCode) ||
-      formData?.emailType === "RESEND_CONCESSION" ||
-      formData?.emailTemplate === "replacement" ||
-      formData?.isResend === true
-    );
-    const resolvedFormRepCode = hasFormRep ? (formRepCode || (formData?.isResend ? record.replacementCode : "")) : "";
-    const isFormRepApplied = resolvedFormRepCode && (
-      record.voucherCode?.toUpperCase() === resolvedFormRepCode.toUpperCase() ||
-      record.prePaidCode?.toUpperCase() === resolvedFormRepCode.toUpperCase()
-    );
+    // A replacement can only be initiated by the Choose a code picker or the
+    // EDIT workflow. Both workflows write an explicit replacementCode marker.
+    // Do not infer replacement from the currently displayed voucher code,
+    // email template, resend flags, dispatch status, or row-selection state.
+    const matchesForm = Boolean(formData && isRecordMatch(record, formData));
+    const matchesSelectedRow = Boolean(selectedRowRecord && isRecordMatch(record, selectedRowRecord));
 
-    const selRepCode = selectedRowRecord?.replacementCode;
-    const hasSelRep = selectedRowRecord && isRecordMatch(record, selectedRowRecord) && (
-      Boolean(selRepCode) ||
-      selectedRowRecord?.emailType === "RESEND_CONCESSION" ||
-      selectedRowRecord?.emailTemplate === "replacement" ||
-      selectedRowRecord?.isResend === true
-    );
-    const resolvedSelRepCode = hasSelRep ? (selRepCode || (selectedRowRecord?.isResend ? record.replacementCode : "")) : "";
-    const isSelRepApplied = resolvedSelRepCode && (
-      record.voucherCode?.toUpperCase() === resolvedSelRepCode.toUpperCase() ||
-      record.prePaidCode?.toUpperCase() === resolvedSelRepCode.toUpperCase()
-    );
+    const explicitReplacementCode = (
+      record.replacementCode ||
+      (matchesForm ? formData?.replacementCode : undefined) ||
+      (matchesSelectedRow ? selectedRowRecord?.replacementCode : undefined) ||
+      ""
+    ).toString().trim().toUpperCase();
 
-    // If replacement was already applied (completed resend), it is NOT pending even if stale formData/selectedRowRecord remains
-    if (isFormRepApplied || isSelRepApplied) {
-      return false;
-    }
+    if (!explicitReplacementCode) return false;
 
-    // If the database record itself has replacement state
-    if (Boolean(record.replacementCode) || record.emailType === "RESEND_CONCESSION" || record.emailTemplate === "replacement" || (record.isResend === true && !isDisp)) {
-      return true;
-    }
+    // A replacement is pending only while its explicitly assigned code has
+    // not yet become the record's active voucher code.
+    const activeCode = [
+      record.voucherCode,
+      record.prePaidCode,
+      record.voucherCodesText
+    ]
+      .map(value => String(value || "").trim().toUpperCase())
+      .find(value => value && value !== "-" && value !== "CANCELLED") || "";
 
-    // If formData or selectedRowRecord has a genuine unapplied replacement
-    if ((hasFormRep && !isFormRepApplied) || (hasSelRep && !isSelRepApplied)) {
-      return true;
-    }
-
-    // If dispatched and no replacement code anywhere unapplied
-    if (isDisp && !record.replacementCode && !hasFormRep && !hasSelRep) {
-      return false;
-    }
-
-    return false;
-  }, [dispatchedKeysSet, unsentKeysSet, selectedRowRecord, formData]);
+    return !activeCode || activeCode !== explicitReplacementCode;
+  }, [selectedRowRecord, formData]);
 
   const getHospital = useCallback((record: CsvPermitRecord) => {
     const raw = String(record?.hospital ?? "").trim();
