@@ -583,20 +583,30 @@ export async function syncPendingDispatches(): Promise<{ synced: number; remaini
 }
 
 /**
- * Builds a standardized permit update object when replacing a voucher code
+ * The single canonical state transition for an explicitly assigned replacement.
+ * Call this only from Choose a code or the EDIT modal after code validation.
+ */
+export function buildExplicitReplacementState(currentRec: any, selectedCode: string) {
+  return {
+    originalVoucherCode: currentRec?.originalVoucherCode || currentRec?.voucherCode || currentRec?.prePaidCode || undefined,
+    replacementCode: selectedCode,
+    isResend: true as const,
+    emailType: "RESEND_CONCESSION" as const,
+    emailTemplate: "replacement" as const
+  };
+}
+
+/**
+ * Builds the complete form update used by the Choose a code workflow.
  */
 export function buildReplacementFormUpdate(currentRec: any, selectedCode: string) {
   return {
     id: currentRec?.id,
     formId: currentRec?.formId,
     vrm: currentRec?.vrm,
-    originalVoucherCode: currentRec?.originalVoucherCode || currentRec?.voucherCode || currentRec?.prePaidCode || undefined,
-    replacementCode: selectedCode,
+    ...buildExplicitReplacementState(currentRec, selectedCode),
     voucherCodesText: selectedCode,
-    status: "Pending",
-    emailType: "RESEND_CONCESSION",
-    isResend: true,
-    emailTemplate: "replacement"
+    status: "Pending"
   };
 }
 

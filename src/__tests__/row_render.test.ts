@@ -516,4 +516,74 @@ describe('DispatchCentre Row Render & Replacement Lock Test Suite (row_render.te
     assert.ok(row.textContent?.includes('Unsend'), 'Scenario E3: Successful resend changes row to Unsend');
     assert.equal(row.textContent?.includes('REPLACEMENT'), false, 'Scenario E3: REPLACEMENT badge is not shown');
   });
+
+  it('Scenario F: Selecting a SENT row with stale legacy replacement flags does not activate replacement', async () => {
+    setupJsdom();
+    const React = await import('react');
+    const ReactDOMClient = await import('react-dom/client');
+    const { act } = await import('react');
+    const { DispatchCentre } = await import('../components/DispatchCentre');
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = ReactDOMClient.createRoot(container);
+
+    const staleFlagsOnly = {
+      ...permitBase,
+      status: 'SENT',
+      isDispatched: true,
+      replacementCode: undefined,
+      originalVoucherCode: 'OLD_CODE',
+      isResend: true,
+      emailType: 'RESEND_CONCESSION',
+      emailTemplate: 'replacement' as const
+    };
+    const keys = [getRecordPrimaryKey(staleFlagsOnly), ...getRecordKeys(staleFlagsOnly)].filter(Boolean) as string[];
+
+    await act(async () => {
+      root.render(
+        React.createElement(DispatchCentre, {
+          database: [staleFlagsOnly],
+          vouchersDatabase: [],
+          dispatchedKeys: keys,
+          unsentKeys: [],
+          dateRangeFilter: 'all',
+          processingDate: '2026-11-04',
+          formData: {
+            id: staleFlagsOnly.id,
+            formId: staleFlagsOnly.formId,
+            vrm: staleFlagsOnly.vrm,
+            originalVoucherCode: 'OLD_CODE',
+            replacementCode: undefined,
+            isResend: true,
+            emailType: 'RESEND_CONCESSION',
+            emailTemplate: 'replacement'
+          },
+          onSelectRecord: () => {},
+          onResendRecord: () => {},
+          onUnsendRecord: () => {}
+        })
+      );
+    });
+
+    let row = Array.from(container.querySelectorAll('tr')).find(tr => tr.textContent?.includes('AB12CDE'));
+    assert.ok(row, 'Scenario F: Row exists');
+    assert.ok(row.textContent?.includes('SENT'), 'Scenario F: Existing permit remains SENT');
+    assert.ok(row.textContent?.includes('Unsend'), 'Scenario F: Existing permit retains Unsend');
+    assert.equal(row.textContent?.includes('REPLACEMENT'), false, 'Scenario F: Legacy flags do not display REPLACEMENT');
+    assert.equal(row.textContent?.includes('Resend'), false, 'Scenario F: Legacy flags do not display Resend');
+
+    await act(async () => {
+      row?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    });
+
+    row = Array.from(container.querySelectorAll('tr')).find(tr => tr.textContent?.includes('AB12CDE'));
+    assert.ok(row, 'Scenario F: Row remains rendered after selection');
+    assert.equal(row.textContent?.includes('REPLACEMENT'), false, 'Scenario F: Row selection cannot activate REPLACEMENT');
+    assert.equal(row.textContent?.includes('Resend'), false, 'Scenario F: Row selection cannot activate Resend');
+
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
 });

@@ -403,8 +403,6 @@ function PermitCardInner({
     return currentSelectedCode !== originalVoucherCode;
   }, [currentSelectedCode, originalVoucherCode]);
 
-  const isVoucherChangedOnSent = qrCodeChanged;
-
   const currentSenderName = useMemo(() => {
     if (!isCurrentDispatched) return "";
     const keys = activeIndex !== -1 && matchingPermits[activeIndex]
@@ -604,22 +602,11 @@ function PermitCardInner({
     return Boolean(data.replacementCode);
   }, [data.replacementCode]);
 
-  const getEmailContent = useCallback((template: "new" | "replacement") => {
-    const isRecordAlreadyDispatched = Boolean(
-      isCurrentDispatched ||
-      data.status === "SENT" ||
-      data.isDispatched === true
-    );
-    const hasExplicitReplacement = Boolean(
-      template === "replacement" ||
-      emailTemplate === "replacement" ||
-      data.emailType === "RESEND_CONCESSION" ||
-      data.isResend ||
-      data.emailTemplate === "replacement" ||
-      data.replacementCode
-    );
-    const hasUpdatedVoucherCode = isRecordAlreadyDispatched && (isVoucherChangedOnSent || isReplacement);
-    const isResentMode = hasExplicitReplacement || hasUpdatedVoucherCode;
+  const getEmailContent = useCallback((_template: "new" | "replacement") => {
+    // Only an explicitly assigned replacementCode (Choose a code / EDIT)
+    // can select replacement email content. Historical flags and code
+    // comparisons are not evidence of a replacement.
+    const isResentMode = Boolean(data.replacementCode);
 
     const params = {
       vrm: data.vrm,
@@ -636,7 +623,7 @@ function PermitCardInner({
     } else {
       return getSendEmailContent(params);
     }
-  }, [data.name, data.vrm, data.validFrom, data.validTo, data.todayDate, data.dateRequired, data.emailType, data.isResend, data.emailTemplate, data.status, data.isDispatched, data.replacementCode, isCurrentDispatched, isVoucherChangedOnSent, emailTemplate, isReplacement]);
+  }, [data.name, data.vrm, data.validFrom, data.validTo, data.todayDate, data.dateRequired, data.replacementCode]);
   
   const showToast = (message: string, type?: string) => {
     setToastType(type || "info");
@@ -970,21 +957,8 @@ function PermitCardInner({
       (!targetRecord && isCancelled)
     );
     const vrm = rec?.vrm || data.vrm || "";
-    const isRecordDispatchedOrSent = Boolean(
-      isCurrentDispatched ||
-      (rec && (rec.status === "SENT" || rec.isDispatched === true)) ||
-      data.status === "SENT" ||
-      data.isDispatched === true
-    );
-    const hasExplicitReplacement = Boolean(
-      data.replacementCode ||
-      data.isResend ||
-      data.emailType === "RESEND_CONCESSION" ||
-      data.emailTemplate === "replacement" ||
-      emailTemplate === "replacement" ||
-      (rec && (rec.replacementCode || rec.isResend || rec.emailType === "RESEND_CONCESSION" || rec.emailTemplate === "replacement"))
-    );
-    const shouldResendConcession = hasExplicitReplacement || (isRecordDispatchedOrSent && (qrCodeChanged || isReplacement));
+    const hasExplicitReplacement = Boolean(data.replacementCode || rec?.replacementCode);
+    const shouldResendConcession = hasExplicitReplacement;
     if (!isCancelledRec && !targetRecord && shouldResendConcession) {
       const res = await handleResendConcessionEmail();
       if (res === false) {
@@ -2102,29 +2076,13 @@ function PermitCardInner({
         (targetRecord && (targetRecord.isDispatched === true || targetRecord.status === "SENT"))
       );
 
-      const hasExplicitTargetReplacement = Boolean(
+      // Replacement email is permitted only when an explicit replacement
+      // code was assigned through Choose a code or EDIT.
+      const isTargetReplacement = Boolean(
         options?.isReplacement ||
         targetRec.replacementCode ||
-        targetRec.emailType === "RESEND_CONCESSION" ||
-        targetRec.isResend ||
-        targetRec.emailTemplate === "replacement" ||
-        (!targetRecord && (
-          data.replacementCode ||
-          data.emailType === "RESEND_CONCESSION" ||
-          data.isResend ||
-          data.emailTemplate === "replacement" ||
-          emailTemplate === "replacement"
-        ))
+        (!targetRecord && data.replacementCode)
       );
-
-      const hasTargetCodeChanged = Boolean(
-        isTargetDispatched && (
-          (targetRec.originalVoucherCode && targetPayloadCode && cleanVoucherCodeValue(targetPayloadCode) !== cleanVoucherCodeValue(targetRec.originalVoucherCode)) ||
-          (!targetRecord && isReplacement)
-        )
-      );
-
-      const isTargetReplacement = hasExplicitTargetReplacement || hasTargetCodeChanged;
       const effectiveTemplate = isTargetReplacement ? "replacement" : "new";
       const content = (effectiveTemplate === "replacement") ? getReplacementEmailContent(params) : getSendEmailContent(params);
       subject = content.subject;
@@ -2692,7 +2650,7 @@ function PermitCardInner({
                 onClick={() => {
                   if (isCancelled) {
                     handleSendClick();
-                  } else if (qrCodeChanged || isReplacement || emailTemplate === "replacement") {
+                  } else if (isReplacement) {
                     handleResendConcessionEmail();
                   } else {
                     handleSendClick();
@@ -2704,7 +2662,9 @@ function PermitCardInner({
                     ? "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border border-slate-200 dark:border-slate-700 cursor-not-allowed hover:scale-100 hover:shadow-xs active:scale-100"
                     : isCancelled
                       ? "bg-rose-600 hover:bg-rose-700 text-white cursor-pointer"
-                      : "bg-[#005EB8] hover:bg-blue-700 text-white cursor-pointer"
+                      : isReplacement
+                        ? "bg-amber-600 hover:bg-amber-700 text-white cursor-pointer"
+                        : "bg-[#005EB8] hover:bg-blue-700 text-white cursor-pointer"
                 }`}
                 title={!isCancelled && !qrUrl ? "A valid QR code is required before sending." : ""}
               >
@@ -2716,7 +2676,7 @@ function PermitCardInner({
                 <span>
                   {isCancelled
                     ? "Send Cancellation Notice" 
-                    : (qrCodeChanged || isReplacement || emailTemplate === "replacement")
+                    : isReplacement
                       ? "Resend Concession Email" 
                       : "Send Concession Email"}
                 </span>
@@ -2745,25 +2705,17 @@ function PermitCardInner({
                   >
                     New
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEmailTemplate("replacement");
-                      onChange?.({
-                        emailTemplate: "replacement",
-                        emailType: "RESEND_CONCESSION",
-                        isResend: true,
-                        replacementCode: data.voucherCodesText || data.replacementCode
-                      });
-                    }}
-                    className={`py-1 font-bold rounded transition-all cursor-pointer ${
-                      emailTemplate === "replacement"
-                        ? "bg-slate-100 dark:bg-slate-800 text-[#005EB8] dark:text-blue-300"
-                        : "text-slate-500 hover:text-slate-800 dark:text-slate-400"
+                  <span
+                    aria-disabled="true"
+                    className={`py-1 font-bold rounded text-center ${
+                      data.replacementCode
+                        ? "bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400"
+                        : "text-slate-300 dark:text-slate-600"
                     }`}
+                    title="Replacement email is enabled only after assigning a code through Choose a code or EDIT."
                   >
-                    Resent
-                  </button>
+                    Replacement
+                  </span>
                 </div>
               </div>
 

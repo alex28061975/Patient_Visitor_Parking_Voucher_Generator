@@ -80,12 +80,34 @@ describe('Row State & Edit Status Test Suite (row_state.test.ts)', () => {
   it('Source code checks', () => {
     const dispatchCentreSrc = fs.readFileSync(path.resolve(process.cwd(), 'src/components/DispatchCentre.tsx'), 'utf8');
     const editModalSrc = fs.readFileSync(path.resolve(process.cwd(), 'src/components/EditRecordModal.tsx'), 'utf8');
+    const permitCardSrc = fs.readFileSync(path.resolve(process.cwd(), 'src/components/PermitCard.tsx'), 'utf8');
+    const appSrc = fs.readFileSync(path.resolve(process.cwd(), 'src/App.tsx'), 'utf8');
+    const dispatchUtilsSrc = fs.readFileSync(path.resolve(process.cwd(), 'src/utils/dispatchUtils.ts'), 'utf8');
 
     // DispatchCentre.tsx does NOT contain "!isDisp && isReplacementPending(record)"
     assert.equal(dispatchCentreSrc.includes('!isDisp && isReplacementPending(record)'), false);
 
     // DispatchCentre.tsx DOES contain "getRowState({ isBlocked, isCancelled, isDispatched, replacementPending }).actionLabel"
     assert.equal(dispatchCentreSrc.includes('getRowState({ isBlocked, isCancelled, isDispatched, replacementPending }).actionLabel'), true);
+
+    // EditRecordModal and Choose a code share the same explicit replacement transition.
+    assert.ok(editModalSrc.includes('buildExplicitReplacementState'));
+    assert.ok(dispatchUtilsSrc.includes('export function buildExplicitReplacementState'));
+
+    // Row selection must not feed selectedRowRecord replacement metadata into the badge logic.
+    assert.equal(dispatchCentreSrc.includes('selectedRowRecord?.replacementCode'), false);
+
+    // Legacy flags and original-code comparisons must not independently activate replacement mode.
+    assert.equal(permitCardSrc.includes('data.emailType === "RESEND_CONCESSION"'), false);
+    assert.equal(permitCardSrc.includes('data.isResend ||'), false);
+    assert.equal(permitCardSrc.includes('targetRec.emailType === "RESEND_CONCESSION"'), false);
+    assert.equal(permitCardSrc.includes('targetRec.originalVoucherCode && targetPayloadCode'), false);
+
+    // App hydration and selection must not infer replacement from legacy flags.
+    assert.ok(appSrc.includes('const isRep = Boolean(next.replacementCode);'));
+    assert.equal(appSrc.includes('localMatch.replacementCode || localMatch.isResend'), false);
+    assert.ok(appSrc.includes('No replacement code has been explicitly assigned. Use Choose a code or EDIT first.'));
+    assert.equal(appSrc.includes('const availableUnused = (vouchersDatabaseRef.current || []).find'), false);
 
     // EditRecordModal.tsx does NOT contain "isCancelled, dispatchedKeys, unsentKeys]"
     assert.equal(editModalSrc.includes('isCancelled, dispatchedKeys, unsentKeys]'), false);

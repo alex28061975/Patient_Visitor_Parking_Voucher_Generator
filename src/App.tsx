@@ -955,6 +955,11 @@ export default function App() {
           prePaidCode,
           qrCode,
           serialNumber,
+          replacementCode: _cachedReplacementCode,
+          originalVoucherCode: _cachedOriginalVoucherCode,
+          isResend: _cachedIsResend,
+          emailType: _cachedEmailType,
+          emailTemplate: _cachedEmailTemplate,
           ...restFormData
         } = parsed;
 
@@ -962,6 +967,11 @@ export default function App() {
           ...defaultState,
           ...restFormData,
           voucherCodesText: "-",
+          replacementCode: undefined,
+          originalVoucherCode: undefined,
+          isResend: false,
+          emailType: "SEND_CONCESSION",
+          emailTemplate: "new",
           name: parsed.name ? toTitleCase(parsed.name) : "",
           ward: parsed.ward ? toTitleCase(parsed.ward) : "",
           vrm: parsed.vrm ? parsed.vrm.toUpperCase() : "",
@@ -1220,10 +1230,7 @@ export default function App() {
 
     const isTargetReplacement = Boolean(
       targetRecord.replacementCode ||
-      targetRecord.emailType === "RESEND_CONCESSION" ||
-      targetRecord.isResend ||
-      targetRecord.emailTemplate === "replacement" ||
-      (isRecordMatch(targetRecord, formData) && (formData.emailType === "RESEND_CONCESSION" || formData.isResend || formData.replacementCode))
+      (isRecordMatch(targetRecord, formData) && formData.replacementCode)
     );
 
     if (isTargetReplacement) {
@@ -1739,13 +1746,14 @@ export default function App() {
           for (const dbRec of dbPermits) {
             const key = getNormalizedPermitKey(dbRec);
             const localMatch = key ? currentDbMap.get(key) : undefined;
-            if (localMatch && (localMatch.replacementCode || localMatch.isResend || localMatch.emailTemplate === "replacement")) {
+            if (localMatch?.replacementCode) {
               mergedMap.set(key || String(dbRec.id), {
                 ...dbRec,
                 replacementCode: localMatch.replacementCode,
-                isResend: localMatch.isResend,
-                emailType: localMatch.emailType,
-                emailTemplate: localMatch.emailTemplate
+                originalVoucherCode: localMatch.originalVoucherCode,
+                isResend: true,
+                emailType: "RESEND_CONCESSION",
+                emailTemplate: "replacement"
               });
             } else {
               mergedMap.set(key || String(dbRec.id), dbRec);
@@ -2325,18 +2333,20 @@ export default function App() {
     setFormData((prev) => {
       let next = { ...prev, ...updates };
 
-      const isRep = next.emailType === "RESEND_CONCESSION" ||
-        next.isResend === true ||
-        next.emailTemplate === "replacement" ||
-        Boolean(next.replacementCode);
+      // A replacement is active only when an explicit replacement code exists.
+      // Historical email/resend flags are deliberately ignored.
+      const isRep = Boolean(next.replacementCode);
 
       if (isRep) {
         next.isResend = true;
         next.emailType = "RESEND_CONCESSION";
         next.emailTemplate = "replacement";
-        if (!next.replacementCode && updates.voucherCodesText) {
-          next.replacementCode = updates.voucherCodesText;
-        }
+      } else {
+        // Legacy resend/template flags cannot keep replacement mode alive.
+        next.replacementCode = undefined;
+        next.isResend = false;
+        next.emailType = "SEND_CONCESSION";
+        next.emailTemplate = "new";
       }
 
       if (updates.phone !== undefined) {
@@ -2410,10 +2420,13 @@ export default function App() {
         const nowTimestamp = Date.now();
         safeLocalStorage.setItem("concessions_custom_vouchers_last_modified", String(nowTimestamp));
 
-        const hasRep = updates.replacementCode !== undefined ||
-          updates.emailType === "RESEND_CONCESSION" ||
-          updates.isResend === true ||
-          updates.emailTemplate === "replacement";
+        // Replacement state is created only by an explicit code assignment
+        // from Choose a code or the EDIT modal. Legacy flags alone are ignored.
+        const hasRep = Boolean(
+          updates.replacementCode &&
+          String(updates.replacementCode).trim() !== "" &&
+          String(updates.replacementCode).trim() !== "-"
+        );
 
         setDatabase((prevDb) => {
           let matchedTarget = false;
@@ -2425,10 +2438,16 @@ export default function App() {
             // If ID/formId matched or first single matching record
             if (isMatch && (!matchedTarget || targetId || targetFormId)) {
               matchedTarget = true;
-              const newVoucher = updates.voucherCodesText || rec.voucherCode || "";
-              const newPrePaid = updates.voucherCodesText || rec.prePaidCode || "";
+              // Keep the currently dispatched voucher as the active code until
+              // the replacement email succeeds. The new code lives only in
+              // replacementCode while the replacement is pending.
+              const newVoucher = hasRep ? (rec.voucherCode || "") : (updates.voucherCodesText || rec.voucherCode || "");
+              const newPrePaid = hasRep ? (rec.prePaidCode || rec.voucherCode || "") : (updates.voucherCodesText || rec.prePaidCode || "");
               const newStatus = updates.status || rec.status;
-              const newRepCode = hasRep ? (updates.replacementCode || updates.voucherCodesText || rec.replacementCode) : rec.replacementCode;
+              const newRepCode = hasRep ? String(updates.replacementCode).trim().toUpperCase() : rec.replacementCode;
+              const newOriginalVoucherCode = hasRep
+                ? (updates.originalVoucherCode || rec.originalVoucherCode || rec.voucherCode || rec.prePaidCode)
+                : rec.originalVoucherCode;
               const newIsResend = hasRep ? true : rec.isResend;
               const newEmailType = hasRep ? "RESEND_CONCESSION" : rec.emailType;
               const newEmailTemplate = hasRep ? "replacement" : rec.emailTemplate;
@@ -2438,6 +2457,7 @@ export default function App() {
                 rec.prePaidCode === newPrePaid &&
                 rec.status === newStatus &&
                 rec.replacementCode === newRepCode &&
+                rec.originalVoucherCode === newOriginalVoucherCode &&
                 rec.isResend === newIsResend &&
                 rec.emailType === newEmailType &&
                 rec.emailTemplate === newEmailTemplate
@@ -2452,6 +2472,7 @@ export default function App() {
                 prePaidCode: newPrePaid,
                 status: newStatus,
                 replacementCode: newRepCode,
+                originalVoucherCode: newOriginalVoucherCode,
                 isResend: newIsResend,
                 emailType: newEmailType,
                 emailTemplate: newEmailTemplate
@@ -2546,17 +2567,6 @@ export default function App() {
       ? (parseDateToISO(enrichedRecord.validTo) || addDays(fromISO, 6)) 
       : (enrichedRecord.dateExpiry ? (parseDateToISO(enrichedRecord.dateExpiry) || addDays(fromISO, 6)) : addDays(fromISO, 6));
 
-    const isRecordDispatched = checkIsRecordDispatched(
-      enrichedRecord,
-      enrichedRecord.vrm,
-      enrichedRecord.driverName,
-      enrichedRecord.dateRequired,
-      dispatchedKeysRef.current,
-      unsentKeysRef.current
-    );
-
-    const isRepPending = false;
-
     setFormData((prev) => ({
       ...prev,
       id: enrichedRecord.id,
@@ -2579,6 +2589,7 @@ export default function App() {
       cancellationReason: enrichedRecord.cancellationReason,
       status: enrichedRecord.status,
       replacementCode: undefined,
+      originalVoucherCode: undefined,
       isResend: false,
       emailType: "SEND_CONCESSION",
       emailTemplate: "new"
@@ -2606,17 +2617,6 @@ export default function App() {
       ? (parseDateToISO(enrichedRecord.validTo) || addDays(fromISO, 6)) 
       : (enrichedRecord.dateExpiry ? (parseDateToISO(enrichedRecord.dateExpiry) || addDays(fromISO, 6)) : addDays(fromISO, 6));
 
-    const isRecordDispatched = checkIsRecordDispatched(
-      enrichedRecord,
-      enrichedRecord.vrm,
-      enrichedRecord.driverName,
-      enrichedRecord.dateRequired,
-      dispatchedKeysRef.current,
-      unsentKeysRef.current
-    );
-
-    const isRepPendingQuick = false;
-
     setFormData((prev) => ({
       ...prev,
       id: enrichedRecord.id,
@@ -2639,6 +2639,7 @@ export default function App() {
       cancellationReason: enrichedRecord.cancellationReason,
       status: enrichedRecord.status,
       replacementCode: undefined,
+      originalVoucherCode: undefined,
       isResend: false,
       emailType: "SEND_CONCESSION",
       emailTemplate: "new"
@@ -3171,34 +3172,18 @@ export default function App() {
   }, [showToast]);
 
   const handleResendRecord = useCallback(async (record: CsvPermitRecord) => {
-    // 1. Identify or generate genuine new voucher code
+    // A resend is permitted only for a replacement code explicitly assigned
+    // through Choose a code or EDIT. Never auto-allocate a code from this action.
     const currentForm = formDataRef.current;
-    let newVoucherCode = (record.replacementCode || (isRecordMatch(record, currentForm) ? currentForm.replacementCode : "") || "").trim().toUpperCase();
-    if (!newVoucherCode || newVoucherCode === "-" || newVoucherCode === "CANCELLED" || newVoucherCode === "PENDING") {
-      const permitFrom = record.validFrom || record.dateRequired || "";
-      const permitTo = record.validTo || record.dateExpiry || (permitFrom ? addDaysISO(normalizeDateToISO(permitFrom), 6) : "");
-      // Find an unused voucher in vouchersDatabase matching date range
-      const availableUnused = (vouchersDatabaseRef.current || []).find(v => {
-        if (!v || !v.code || !isVoucherAvailableStatus(v)) return false;
-        if (!isVoucherForPermitDateRange(v, permitFrom, permitTo)) return false;
-        const clean = cleanVoucherCodeValue(v.code).toUpperCase();
-        if (!clean || clean === "-" || clean === "CANCELLED" || clean === "PENDING") return false;
-        const inUse = (databaseRef.current || []).some(r => !isRecordMatch(r, record) && isVoucherCodeMatch(r.voucherCode, clean));
-        return !inUse;
-      });
+    let newVoucherCode = (
+      record.replacementCode ||
+      (isRecordMatch(record, currentForm) ? currentForm.replacementCode : "") ||
+      ""
+    ).trim().toUpperCase();
 
-      if (availableUnused && availableUnused.code) {
-        newVoucherCode = cleanVoucherCodeValue(availableUnused.code).toUpperCase();
-        setVouchersDatabase(prev => {
-          const next = prev.map(v => v.code === availableUnused.code ? { ...v, isUsed: true, status: "used" } : v);
-          vouchersDatabaseRef.current = next;
-          safeLocalStorage.setItem("concessions_vouchers_db", JSON.stringify(next));
-          return next;
-        });
-      } else {
-        showToast("No unused voucher available for this permit's date range", "warning");
-        return;
-      }
+    if (!newVoucherCode || newVoucherCode === "-" || newVoucherCode === "CANCELLED" || newVoucherCode === "PENDING") {
+      showToast("No replacement code has been explicitly assigned. Use Choose a code or EDIT first.", "warning");
+      return;
     }
 
     // 2. Call backend /api/emails/resend to create tracking record & pixel
@@ -3336,10 +3321,7 @@ export default function App() {
     const currentForm = formDataRef.current;
     const isRep = Boolean(
       record.replacementCode ||
-      record.emailType === "RESEND_CONCESSION" ||
-      record.isResend ||
-      record.emailTemplate === "replacement" ||
-      (isRecordMatch(record, currentForm) && (currentForm.isResend || currentForm.replacementCode || currentForm.emailType === "RESEND_CONCESSION"))
+      (isRecordMatch(record, currentForm) && currentForm.replacementCode)
     );
     if (isRep) {
       return handleResendRecord(record);

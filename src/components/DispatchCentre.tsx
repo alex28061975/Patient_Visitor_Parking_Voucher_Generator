@@ -237,54 +237,6 @@ function DispatchCentreComponent({
   const [selectedRowRecord, setSelectedRowRecord] = useState<CsvPermitRecord | null>(null);
   const [isReplacingCode, setIsReplacingCode] = useState(false);
 
-  // Sync selectedRowRecord when replacement code is assigned or cleared
-  useEffect(() => {
-    const isRep = (formData?.emailType === "RESEND_CONCESSION" || formData?.isResend || Boolean(formData?.replacementCode) || formData?.emailTemplate === "replacement") && formData?.status !== "SENT";
-    if (isRep && (formData?.voucherCodesText || formData?.replacementCode)) {
-      const repCode = formData.replacementCode || formData.voucherCodesText;
-      setSelectedRowRecord(prev => {
-        if (prev) {
-          return {
-            ...prev,
-            replacementCode: repCode || prev.replacementCode,
-            isResend: true,
-            emailType: "RESEND_CONCESSION",
-            emailTemplate: "replacement"
-          };
-        }
-        if (database) {
-          const match = database.find(r => isRecordMatch(r, formData));
-          if (match) {
-            return {
-              ...match,
-              replacementCode: repCode || match.replacementCode,
-              isResend: true,
-              emailType: "RESEND_CONCESSION",
-              emailTemplate: "replacement"
-            };
-          }
-        }
-        return null;
-      });
-    } else if (formData && (formData.status === "SENT" || formData.isResend === false)) {
-      // Clear replacement flags if formData is marked SENT or replacement is completed
-      setSelectedRowRecord(prev => {
-        if (prev && isRecordMatch(prev, formData)) {
-          return {
-            ...prev,
-            replacementCode: undefined,
-            isResend: false,
-            emailType: undefined,
-            emailTemplate: undefined,
-            status: "SENT",
-            isDispatched: true
-          };
-        }
-        return prev;
-      });
-    }
-  }, [formData?.voucherCodesText, formData?.replacementCode, formData?.emailType, formData?.isResend, formData?.emailTemplate, formData?.status, database]);
-
   // Keep selectedRowRecord up to date with latest database updates
   useEffect(() => {
     if (selectedRowRecord && database) {
@@ -292,14 +244,19 @@ function DispatchCentreComponent({
       if (updated) {
         setSelectedRowRecord(prev => {
           if (!prev) return null;
-          const isDisp = checkIsRecordDispatched(updated, updated.vrm, updated.driverName, updated.dateRequired, dispatchedKeysSet, unsentKeysSet);
+          // Keep replacement workflow state out of passive row-selection hydration.
+          // Explicit Choose a code / EDIT actions update replacementCode separately.
+          const {
+            replacementCode: _ignoredReplacementCode,
+            originalVoucherCode: _ignoredOriginalVoucherCode,
+            isResend: _ignoredIsResend,
+            emailType: _ignoredEmailType,
+            emailTemplate: _ignoredEmailTemplate,
+            ...updatedWithoutReplacementState
+          } = updated as any;
           return {
             ...prev,
-            ...updated,
-            replacementCode: updated.replacementCode !== undefined ? updated.replacementCode : prev.replacementCode,
-            isResend: updated.isResend !== undefined ? updated.isResend : prev.isResend,
-            emailType: updated.emailType !== undefined ? updated.emailType : prev.emailType,
-            emailTemplate: updated.emailTemplate !== undefined ? updated.emailTemplate : prev.emailTemplate
+            ...updatedWithoutReplacementState
           };
         });
       }
@@ -307,13 +264,8 @@ function DispatchCentreComponent({
   }, [database, dispatchedKeysSet, unsentKeysSet]);
 
   const handleRowClick = (record: CsvPermitRecord) => {
-    setSelectedRowRecord({
-      ...record,
-      replacementCode: undefined,
-      isResend: false,
-      emailType: undefined,
-      emailTemplate: undefined
-    });
+    // Passive selection only. Do not read, clear, or set replacement workflow state here.
+    setSelectedRowRecord(record);
     onSelectRecord(record);
   };
 
@@ -584,27 +536,17 @@ function DispatchCentreComponent({
     if (selectedRowRecord) {
       const updated = (database || []).find(r => isRecordMatch(r, selectedRowRecord));
       if (updated) {
-        const isDisp = checkIsRecordDispatched(updated, updated.vrm, updated.driverName, updated.dateRequired, dispatchedKeysSet, unsentKeysSet);
-        return {
-          ...updated,
-          replacementCode: updated.replacementCode !== undefined ? updated.replacementCode : selectedRowRecord.replacementCode,
-          isResend: updated.isResend !== undefined ? updated.isResend : selectedRowRecord.isResend,
-          emailType: updated.emailType !== undefined ? updated.emailType : selectedRowRecord.emailType,
-          emailTemplate: updated.emailTemplate !== undefined ? updated.emailTemplate : selectedRowRecord.emailTemplate
-        };
+        return updated;
       }
       return selectedRowRecord;
     }
     if (formData) {
       const match = (database || []).find(r => isRecordMatch(r, formData));
       if (match) {
-        if (formData.emailType === "RESEND_CONCESSION" || formData.isResend || formData.replacementCode) {
+        if (formData.replacementCode) {
           return {
             ...match,
-            replacementCode: formData.replacementCode || formData.voucherCodesText || match.replacementCode,
-            isResend: true,
-            emailType: "RESEND_CONCESSION",
-            emailTemplate: "replacement"
+            replacementCode: formData.replacementCode
           };
         }
         return match;
@@ -810,37 +752,26 @@ function DispatchCentreComponent({
     return false;
   }, [selectedRowRecord, formData]);
 
-  const isReplacementPending = useCallback((record: CsvPermitRecord) => {
+    const isReplacementPending = useCallback((record: CsvPermitRecord) => {
     if (!record) return false;
 
-    // A replacement can only be initiated by the Choose a code picker or the
-    // EDIT workflow. Both workflows write an explicit replacementCode marker.
-    // Do not infer replacement from the currently displayed voucher code,
-    // email template, resend flags, dispatch status, or row-selection state.
+    // A replacement is only PENDING if a replacement code is currently set but not yet completed/sent,
+    // or if the record currently being edited in formData has a replacement pending.
+    const isDispatched = checkIsRecordDispatched(record, record.vrm, record.driverName, record.dateRequired, dispatchedKeysSet, unsentKeysSet);
+
+    // If already dispatched and no uncommitted replacement code draft is pending, it's SENT, not pending replacement!
+    if (isDispatched && !record.replacementCode && !formData?.replacementCode) {
+      return false;
+    }
+
     const matchesForm = Boolean(formData && isRecordMatch(record, formData));
-    const matchesSelectedRow = Boolean(selectedRowRecord && isRecordMatch(record, selectedRowRecord));
-
-    const explicitReplacementCode = (
+    const hasUnsentReplacement = Boolean(
       record.replacementCode ||
-      (matchesForm ? formData?.replacementCode : undefined) ||
-      (matchesSelectedRow ? selectedRowRecord?.replacementCode : undefined) ||
-      ""
-    ).toString().trim().toUpperCase();
+      (matchesForm && formData?.replacementCode)
+    );
 
-    if (!explicitReplacementCode) return false;
-
-    // A replacement is pending only while its explicitly assigned code has
-    // not yet become the record's active voucher code.
-    const activeCode = [
-      record.voucherCode,
-      record.prePaidCode,
-      record.voucherCodesText
-    ]
-      .map(value => String(value || "").trim().toUpperCase())
-      .find(value => value && value !== "-" && value !== "CANCELLED") || "";
-
-    return !activeCode || activeCode !== explicitReplacementCode;
-  }, [selectedRowRecord, formData]);
+    return hasUnsentReplacement;
+  }, [formData, dispatchedKeysSet, unsentKeysSet]);
 
   const getHospital = useCallback((record: CsvPermitRecord) => {
     const raw = String(record?.hospital ?? "").trim();
@@ -1532,7 +1463,7 @@ function DispatchCentreComponent({
 
   const availableWards = allWardsList;
 
-  const handleAction = async (record: CsvPermitRecord, sent: boolean, replacement = false) => {
+    const handleAction = async (record: CsvPermitRecord, sent: boolean, replacement = false) => {
     const key = String(record.formId ?? record.id ?? record.vrm);
     setBusyKey(key);
     try {
@@ -1547,6 +1478,7 @@ function DispatchCentreComponent({
           return {
             ...prev,
             replacementCode: undefined,
+            originalVoucherCode: undefined,
             isResend: false,
             emailType: undefined,
             emailTemplate: undefined,
@@ -1554,6 +1486,16 @@ function DispatchCentreComponent({
             isDispatched: true
           };
         });
+        if (formData && isRecordMatch(record, formData)) {
+          onChangeFormData?.({
+            replacementCode: undefined,
+            originalVoucherCode: undefined,
+            isResend: false,
+            emailType: undefined,
+            emailTemplate: undefined,
+            status: "SENT"
+          });
+        }
       }
       else if (sent) await onUnsendRecord?.(record);
       else await onSendRecord?.(record);
@@ -2230,7 +2172,7 @@ function DispatchCentreComponent({
                           CANCELLED
                         </span>
                       ) : replacementPending ? (
-                        <span className="text-amber-600 dark:text-amber-400 font-bold bg-amber-50 dark:bg-amber-950/30 px-2 py-0.5 rounded border border-amber-200 dark:border-amber-700/50 inline-flex items-center gap-1.5">
+                        <span className="text-amber-500 bg-amber-500/10 border-amber-500/30 font-bold px-2 py-0.5 rounded border inline-flex items-center gap-1.5">
                           <span className="inline-block animate-spin text-[10px]">⟳</span>
                           {displayCode || "-"}
                         </span>
@@ -2304,7 +2246,7 @@ function DispatchCentreComponent({
                           CANCELLED
                         </span>
                       ) : replacementPending ? (
-                        <span className="border border-amber-400 dark:border-amber-500/60 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 font-bold px-2 py-0.5 rounded text-[9px] tracking-wider uppercase inline-flex items-center justify-center gap-1.5 whitespace-nowrap animate-pulse">
+                        <span className="bg-amber-500/15 text-amber-400 border-amber-500/30 border font-bold px-2 py-0.5 rounded text-[9px] tracking-wider uppercase inline-flex items-center justify-center gap-1.5 whitespace-nowrap animate-pulse">
                           <span className="inline-block animate-spin text-[9px]">⟳</span>
                           REPLACEMENT
                         </span>
@@ -2371,8 +2313,8 @@ function DispatchCentreComponent({
                               }
                             : replacementPending
                               ? {
-                                  main: "cursor-pointer bg-amber-600 hover:bg-amber-700 dark:bg-amber-600 dark:hover:bg-amber-700",
-                                  chevron: "cursor-pointer bg-amber-600 hover:bg-amber-700 dark:bg-amber-600 dark:hover:bg-amber-700 border-l border-amber-700/60",
+                                  main: "cursor-pointer bg-amber-500/15 text-amber-400 border border-amber-500/30 hover:bg-amber-500/25",
+                                  chevron: "cursor-pointer bg-amber-500/15 text-amber-400 border-l border-amber-500/30 hover:bg-amber-500/25",
                                 }
                               : isDispatched
                                 ? {
@@ -2392,7 +2334,7 @@ function DispatchCentreComponent({
                                   disabled={busyKey === rowKey || isBlocked} 
                                   onClick={() => { if (!isBlocked) handleAction(record, isDispatched, replacementPending); }} 
                                   title={isBlocked ? "This VRM is on the Manage Blocklist — dispatch disabled" : undefined}
-                                  className={`flex items-center gap-1 px-2 py-0.5 text-white text-[10px] font-medium transition-colors disabled:opacity-50 whitespace-nowrap ${splitActionClasses.main}`}
+                                  className={`flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium transition-colors disabled:opacity-50 whitespace-nowrap ${replacementPending ? "text-amber-400" : "text-white"} ${splitActionClasses.main}`}
                                 >
                                   {busyKey === rowKey ? (
                                     <RefreshCw className="w-2.5 h-2.5 animate-spin" />
@@ -2409,7 +2351,7 @@ function DispatchCentreComponent({
                                   type="button" 
                                   disabled={isBlocked}
                                   onClick={() => { if (!isBlocked) onSelectRecord(record); }} 
-                                  className={`px-1.5 py-0.5 text-white transition-colors ${splitActionClasses.chevron}`}
+                                  className={`px-1.5 py-0.5 transition-colors ${replacementPending ? "text-amber-400" : "text-white"} ${splitActionClasses.chevron}`}
                                   title={isBlocked ? "Disabled" : "Select Record"}
                                 >
                                   <ChevronDown className="w-2.5 h-2.5" />

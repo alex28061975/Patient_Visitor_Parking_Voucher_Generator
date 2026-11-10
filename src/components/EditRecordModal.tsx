@@ -13,7 +13,7 @@ import {
 import { isVrmSilentBlockedSync } from "../lib/blocklist";
 import { isVoucherForPermitDateRange, cleanVoucherCodeValue, validateManualVoucherChange, getSelectableActiveDateCodes, buildAssignedCodeSet } from "../utils/voucherValidation";
 import { HOSPITAL_SITES } from "../types";
-import { checkIsRecordDispatched, resolveEditRecordStatus } from "../utils/dispatchUtils";
+import { checkIsRecordDispatched, resolveEditRecordStatus, buildExplicitReplacementState } from "../utils/dispatchUtils";
 
 interface EditRecordModalProps {
   isOpen: boolean;
@@ -431,12 +431,21 @@ function EditRecordModalComponent({
       isCancelled: isCancelledFinal,
       cancellationReason: isCancelledFinal ? (record.cancellationReason || "MANUAL") : undefined,
       isDispatched: !isCancelledFinal && formStatus === "SENT",
-      // Replacement fields
-      replacementCode: finalHasReplacement ? finalReplacement : undefined,
-      originalVoucherCode: record.originalVoucherCode || (finalHasReplacement ? (origCode !== "-" && origCode !== "CANCELLED" ? origCode : undefined) : undefined),
-      emailType: finalHasReplacement ? "RESEND_CONCESSION" : (record.emailType === "RESEND_CONCESSION" ? "SEND_CONCESSION" : record.emailType),
-      isResend: finalHasReplacement ? true : false,
-      emailTemplate: finalHasReplacement ? "replacement" : (record.emailTemplate === "replacement" ? "new" : record.emailTemplate)
+      // Replacement state uses the same canonical transition as Choose a code.
+      ...(finalHasReplacement
+        ? buildExplicitReplacementState(
+            { ...record, voucherCode: origCode || record.voucherCode },
+            finalReplacement
+          )
+        : {
+            replacementCode: undefined,
+            isResend: false as const,
+            emailType: "SEND_CONCESSION" as const,
+            emailTemplate: "new" as const
+          }),
+      originalVoucherCode: finalHasReplacement
+        ? (record.originalVoucherCode || (origCode !== "-" && origCode !== "CANCELLED" ? origCode : undefined))
+        : record.originalVoucherCode
     };
 
     setIsSaving(true);
