@@ -2555,12 +2555,7 @@ export default function App() {
       unsentKeysRef.current
     );
 
-    const isRepPending = Boolean(
-      enrichedRecord.replacementCode ||
-      enrichedRecord.emailType === "RESEND_CONCESSION" ||
-      enrichedRecord.isResend ||
-      enrichedRecord.emailTemplate === "replacement"
-    );
+    const isRepPending = false;
 
     setFormData((prev) => ({
       ...prev,
@@ -2576,17 +2571,17 @@ export default function App() {
       todayDate: prev.todayDate || enrichedRecord.todayDate || getTodayISO(),
       phone: formatPhoneNumber(enrichedRecord.phone || ""),
       email: (enrichedRecord.email || "").toLowerCase(),
-      voucherCodesText: isRepPending ? (enrichedRecord.replacementCode || enrichedRecord.voucherCode || "-") : (enrichedRecord.voucherCode || "-"),
+      voucherCodesText: enrichedRecord.voucherCode || "-",
       startTime: enrichedRecord.startTime,
       createdAt: enrichedRecord.createdAt,
       completionTime: enrichedRecord.completionTime,
       isCancelled: enrichedRecord.isCancelled,
       cancellationReason: enrichedRecord.cancellationReason,
       status: enrichedRecord.status,
-      replacementCode: isRepPending ? enrichedRecord.replacementCode : undefined,
-      isResend: isRepPending,
-      emailType: isRepPending ? "RESEND_CONCESSION" : "SEND_CONCESSION",
-      emailTemplate: isRepPending ? "replacement" : "new"
+      replacementCode: undefined,
+      isResend: false,
+      emailType: "SEND_CONCESSION",
+      emailTemplate: "new"
     }));
   }, []);
 
@@ -2620,12 +2615,7 @@ export default function App() {
       unsentKeysRef.current
     );
 
-    const isRepPendingQuick = Boolean(
-      enrichedRecord.replacementCode ||
-      enrichedRecord.emailType === "RESEND_CONCESSION" ||
-      enrichedRecord.isResend ||
-      enrichedRecord.emailTemplate === "replacement"
-    );
+    const isRepPendingQuick = false;
 
     setFormData((prev) => ({
       ...prev,
@@ -2641,17 +2631,17 @@ export default function App() {
       todayDate: prev.todayDate || enrichedRecord.todayDate || getTodayISO(),
       phone: formatPhoneNumber(enrichedRecord.phone || ""),
       email: (enrichedRecord.email || "").toLowerCase(),
-      voucherCodesText: isRepPendingQuick ? (enrichedRecord.replacementCode || enrichedRecord.voucherCode || "-") : (enrichedRecord.voucherCode || "-"),
+      voucherCodesText: enrichedRecord.voucherCode || "-",
       startTime: enrichedRecord.startTime,
       createdAt: enrichedRecord.createdAt,
       completionTime: enrichedRecord.completionTime,
       isCancelled: enrichedRecord.isCancelled,
       cancellationReason: enrichedRecord.cancellationReason,
       status: enrichedRecord.status,
-      replacementCode: isRepPendingQuick ? enrichedRecord.replacementCode : undefined,
-      isResend: isRepPendingQuick,
-      emailType: isRepPendingQuick ? "RESEND_CONCESSION" : "SEND_CONCESSION",
-      emailTemplate: isRepPendingQuick ? "replacement" : "new"
+      replacementCode: undefined,
+      isResend: false,
+      emailType: "SEND_CONCESSION",
+      emailTemplate: "new"
     }));
   }, []);
 
