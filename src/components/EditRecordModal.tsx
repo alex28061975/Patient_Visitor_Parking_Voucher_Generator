@@ -13,7 +13,7 @@ import {
 import { isVrmSilentBlockedSync } from "../lib/blocklist";
 import { isVoucherForPermitDateRange, cleanVoucherCodeValue, validateManualVoucherChange, getSelectableActiveDateCodes, buildAssignedCodeSet } from "../utils/voucherValidation";
 import { HOSPITAL_SITES } from "../types";
-import { checkIsRecordDispatched, resolveEditRecordStatus, buildExplicitReplacementState } from "../utils/dispatchUtils";
+import { checkIsRecordDispatched, resolveEditRecordStatus, buildExplicitReplacementState, buildReplacementRecord } from "../utils/dispatchUtils";
 
 interface EditRecordModalProps {
   isOpen: boolean;
@@ -409,7 +409,7 @@ function EditRecordModalComponent({
       }
     }
 
-    const updatedRecord: CsvPermitRecord = {
+    const baseUpdatedRecord: CsvPermitRecord = {
       ...record,
       vrm: trimmedVrm,
       driverName: formDriverName.trim(),
@@ -430,23 +430,18 @@ function EditRecordModalComponent({
       status: isCancelledFinal ? "CANCELLED" : formStatus,
       isCancelled: isCancelledFinal,
       cancellationReason: isCancelledFinal ? (record.cancellationReason || "MANUAL") : undefined,
-      isDispatched: !isCancelledFinal && formStatus === "SENT",
-      // Replacement state uses the same canonical transition as Choose a code.
-      ...(finalHasReplacement
-        ? buildExplicitReplacementState(
-            { ...record, voucherCode: origCode || record.voucherCode },
-            finalReplacement
-          )
-        : {
-            replacementCode: undefined,
-            isResend: false as const,
-            emailType: "SEND_CONCESSION" as const,
-            emailTemplate: "new" as const
-          }),
-      originalVoucherCode: finalHasReplacement
-        ? (record.originalVoucherCode || (origCode !== "-" && origCode !== "CANCELLED" ? origCode : undefined))
-        : record.originalVoucherCode
+      isDispatched: !isCancelledFinal && formStatus === "SENT"
     };
+
+    const updatedRecord: CsvPermitRecord = finalHasReplacement
+      ? buildReplacementRecord(baseUpdatedRecord, finalReplacement)
+      : {
+          ...baseUpdatedRecord,
+          replacementCode: undefined,
+          isResend: false as const,
+          emailType: "SEND_CONCESSION" as const,
+          emailTemplate: "new" as const
+        };
 
     setIsSaving(true);
     Promise.resolve(onSave(updatedRecord))

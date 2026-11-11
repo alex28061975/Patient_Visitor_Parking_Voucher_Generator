@@ -60,7 +60,7 @@ import {
   safeParseDateToTimestamp,
   safeParseDMYToISO
 } from "../utils/csvParser";
-import { checkIsRecordDispatched, isRecordMatch, isPlaceholderVrm, getRecordPrimaryKey, buildReplacementFormUpdate, getRowState } from "../utils/dispatchUtils";
+import { checkIsRecordDispatched, isRecordMatch, isPlaceholderVrm, getRecordPrimaryKey, buildReplacementFormUpdate, getRowState, buildReplacementRecord } from "../utils/dispatchUtils";
 import { isVrmSilentBlockedSync } from "../lib/blocklist";
 import { VoucherCodePicker } from "./VoucherCodePicker";
 // ⭐ FIX: Import canonical date & voucher matching functions from voucherValidation
@@ -78,7 +78,8 @@ import {
   getVoucherInventorySummary,
   getStockLevel,
   getCoverLevel,
-  excludeRecordOwnCodes
+  excludeRecordOwnCodes,
+  validateManualVoucherChange
 } from "../utils/voucherValidation";
 
 // ⭐ FIX: Re-export helper functions so other files importing from DispatchCentre don't break
@@ -117,6 +118,7 @@ interface DispatchCentreProps {
   onResetVouchers?: () => Promise<any> | void;
   onEditRecord?: (record: CsvPermitRecord, resolvedCode?: string) => void;
   onResendRecord?: (record: CsvPermitRecord) => Promise<void> | void;
+  onSaveRecord?: (record: CsvPermitRecord) => Promise<void> | void;
   onPreviewRecord?: (record: CsvPermitRecord) => void;
   emailTracking?: Record<string, { status: "SENT"; sentAt?: string; trackingId?: string }>;
 }
@@ -176,6 +178,7 @@ function DispatchCentreComponent({
   onResetVouchers,
   onEditRecord,
   onResendRecord,
+  onSaveRecord,
   onPreviewRecord,
   emailTracking = {}
 }: DispatchCentreProps) {
@@ -677,37 +680,46 @@ function DispatchCentreComponent({
     }
 
     const currentRec = activeRecord || selectedRowRecord;
+    if (!currentRec) return;
+
     const assignedSet = buildAssignedCodeSet(database, currentRec);
 
-    if (assignedSet.has(selectedCode)) {
-      setAssignmentError(`${selectedCode} is no longer available`);
+    const permitDateReq = currentRec.dateRequired || processingDate || getTodayISO();
+    const permitDateExp = currentRec.dateExpiry || currentRec.validTo || addDays(permitDateReq, 6);
+    const origCode = cleanVoucherCodeValue(currentRec.replacementCode || currentRec.voucherCode || currentRec.prePaidCode || "").trim().toUpperCase();
+
+    const voucherValidation = validateManualVoucherChange({
+      origCode,
+      newCode: selectedCode,
+      permitDateRequired: permitDateReq,
+      permitDateExpiry: permitDateExp,
+      origDateRequired: currentRec.dateRequired,
+      origDateExpiry: currentRec.dateExpiry || currentRec.validTo,
+      vouchersDatabase,
+      assignedCodesInOtherRecords: assignedSet
+    });
+
+    if (!voucherValidation.isValid) {
+      setAssignmentError(voucherValidation.error || `${selectedCode} is not valid for this permit date range.`);
       setTimeout(() => setAssignmentError(null), 4000);
       return;
     }
+
     setAssignmentError(null);
     setIsReplacingCode(true);
 
-    const originalVoucherCode = currentRec?.originalVoucherCode || currentRec?.voucherCode || currentRec?.prePaidCode;
+    const updatedRecord = buildReplacementRecord(currentRec, selectedCode);
 
     if (currentRec) {
-      setSelectedRowRecord({
-        ...currentRec,
-        originalVoucherCode: originalVoucherCode || currentRec.originalVoucherCode,
-        replacementCode: selectedCode,
-        voucherCodesText: selectedCode,
-        status: "Pending",
-        isResend: true,
-        emailType: "RESEND_CONCESSION",
-        emailTemplate: "replacement"
-      });
+      setSelectedRowRecord(updatedRecord);
     }
 
-    onChangeFormData?.(buildReplacementFormUpdate(currentRec, selectedCode) as any);
+    onSaveRecord?.(updatedRecord);
 
     setTimeout(() => {
       setIsReplacingCode(false);
     }, 600);
-  }, [activeRecord, selectedRowRecord, database, onChangeFormData]);
+  }, [activeRecord, selectedRowRecord, database, vouchersDatabase, processingDate, onSaveRecord]);
 
   const handleActiveDateCodeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     handleActiveDateCodeSelect(e.target.value);
@@ -752,26 +764,36 @@ function DispatchCentreComponent({
     return false;
   }, [selectedRowRecord, formData]);
 
-    const isReplacementPending = useCallback((record: CsvPermitRecord) => {
+  const isReplacementPending = useCallback((record: CsvPermitRecord) => {
     if (!record) return false;
-
-    // A replacement is only PENDING if a replacement code is currently set but not yet completed/sent,
-    // or if the record currently being edited in formData has a replacement pending.
     const isDispatched = checkIsRecordDispatched(record, record.vrm, record.driverName, record.dateRequired, dispatchedKeysSet, unsentKeysSet);
 
-    // If already dispatched and no uncommitted replacement code draft is pending, it's SENT, not pending replacement!
-    if (isDispatched && !record.replacementCode && !formData?.replacementCode) {
+    const activeRepCode = record.replacementCode || 
+      (selectedRowRecord && isRecordMatch(record, selectedRowRecord) ? selectedRowRecord.replacementCode : undefined) ||
+      (formData && isRecordMatch(record, formData) ? formData.replacementCode : undefined);
+    if (!activeRepCode) return false;
+
+    const activeCode = [
+      record.voucherCode,
+      record.prePaidCode,
+      record.voucherCodesText
+    ]
+      .map(v => String(v || "").trim().toUpperCase())
+      .find(v => v && v !== "-" && v !== "CANCELLED") || "";
+
+    if (activeCode && activeCode === String(activeRepCode).trim().toUpperCase()) {
       return false;
     }
 
-    const matchesForm = Boolean(formData && isRecordMatch(record, formData));
-    const hasUnsentReplacement = Boolean(
-      record.replacementCode ||
-      (matchesForm && formData?.replacementCode)
-    );
+    const localRepCode = (selectedRowRecord && isRecordMatch(record, selectedRowRecord) ? selectedRowRecord.replacementCode : undefined) ||
+      (formData && isRecordMatch(record, formData) ? formData.replacementCode : undefined);
 
-    return hasUnsentReplacement;
-  }, [formData, dispatchedKeysSet, unsentKeysSet]);
+    if (isDispatched && !record.replacementCode && !localRepCode) {
+      return false;
+    }
+
+    return true;
+  }, [formData, selectedRowRecord, dispatchedKeysSet, unsentKeysSet]);
 
   const getHospital = useCallback((record: CsvPermitRecord) => {
     const raw = String(record?.hospital ?? "").trim();

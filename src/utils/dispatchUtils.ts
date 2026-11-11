@@ -1,4 +1,4 @@
-import { CsvPermitRecord, getTodayISO, parseDateToISO } from "./csvParser";
+import { CsvPermitRecord, getTodayISO, parseDateToISO, cleanVoucherCodeValue } from "./csvParser";
 import { getSupabaseClient, syncDispatchedToSupabase, deleteDispatchedFromSupabase, deleteDispatchedKeysFromSupabase, fetchDispatchedFromSupabase } from "../lib/supabase";
 import { safeLocalStorage } from "./safeLocalStorage";
 
@@ -583,17 +583,29 @@ export async function syncPendingDispatches(): Promise<{ synced: number; remaini
 }
 
 /**
- * The single canonical state transition for an explicitly assigned replacement.
- * Call this only from Choose a code or the EDIT modal after code validation.
+ * The single canonical state transition for an explicitly assigned replacement record.
+ * Preserves existing voucherCode, prePaidCode, voucherCodesText and status.
  */
-export function buildExplicitReplacementState(currentRec: any, selectedCode: string) {
+export function buildReplacementRecord(record: any, selectedCode: string) {
+  const currentCode = record?.voucherCode || record?.prePaidCode || record?.voucherCodesText || "";
+  const cleanCurr = cleanVoucherCodeValue(currentCode).trim().toUpperCase();
+  const validOrig = cleanCurr && cleanCurr !== "-" && cleanCurr !== "CANCELLED" ? cleanCurr : undefined;
   return {
-    originalVoucherCode: currentRec?.originalVoucherCode || currentRec?.voucherCode || currentRec?.prePaidCode || undefined,
+    ...record,
+    originalVoucherCode: record?.originalVoucherCode || validOrig,
     replacementCode: selectedCode,
     isResend: true as const,
     emailType: "RESEND_CONCESSION" as const,
-    emailTemplate: "replacement" as const
+    emailTemplate: "replacement" as const,
+    voucherCode: record?.voucherCode,
+    prePaidCode: record?.prePaidCode,
+    voucherCodesText: record?.voucherCodesText,
+    status: record?.status
   };
+}
+
+export function buildExplicitReplacementState(currentRec: any, selectedCode: string) {
+  return buildReplacementRecord(currentRec, selectedCode);
 }
 
 /**

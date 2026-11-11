@@ -3507,6 +3507,7 @@ export default function App() {
             onBrowseVouchers={handleBrowseVouchers}
             onResetVouchers={handleResetVouchers}
             onEditRecord={handleEditRecord}
+            onSaveRecord={handleSaveRecord}
             onPreviewRecord={handlePreviewRecord}
           />
 

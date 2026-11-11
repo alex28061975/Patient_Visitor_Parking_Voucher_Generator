@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { getRowState, resolveEditRecordStatus } from '../utils/dispatchUtils';
+import { getRowState, resolveEditRecordStatus, buildReplacementRecord } from '../utils/dispatchUtils';
 import { CsvPermitRecord } from '../utils/csvParser';
 
 describe('Row State & Edit Status Test Suite (row_state.test.ts)', () => {
@@ -111,6 +111,34 @@ describe('Row State & Edit Status Test Suite (row_state.test.ts)', () => {
 
     // EditRecordModal.tsx does NOT contain "isCancelled, dispatchedKeys, unsentKeys]"
     assert.equal(editModalSrc.includes('isCancelled, dispatchedKeys, unsentKeys]'), false);
+
+    // Source check: handleActiveDateCodeSelect calls onSaveRecord and no longer calls onChangeFormData
+    assert.ok(dispatchCentreSrc.includes('onSaveRecord?.(updatedRecord)'));
+    assert.equal(dispatchCentreSrc.includes('onChangeFormData?.(buildReplacementFormUpdate'), false);
+  });
+
+  it('buildReplacementRecord and field preservation tests', () => {
+    const permit = {
+      id: '1',
+      voucherCode: 'ORIG_VOUCHER',
+      prePaidCode: 'ORIG_VOUCHER',
+      status: 'SENT'
+    };
+    const rep1 = buildReplacementRecord(permit, 'REP_CODE_1');
+    assert.equal(rep1.replacementCode, 'REP_CODE_1');
+    assert.equal(rep1.originalVoucherCode, 'ORIG_VOUCHER');
+    assert.equal(rep1.isResend, true);
+    assert.equal(rep1.emailType, 'RESEND_CONCESSION');
+    assert.equal(rep1.emailTemplate, 'replacement');
+    assert.equal(rep1.status, 'SENT');
+    assert.equal(rep1.voucherCode, 'ORIG_VOUCHER');
+
+    // Second replacement keeping the FIRST original code
+    const rep2 = buildReplacementRecord(rep1, 'REP_CODE_2');
+    assert.equal(rep2.replacementCode, 'REP_CODE_2');
+    assert.equal(rep2.originalVoucherCode, 'ORIG_VOUCHER');
+    assert.equal(rep2.status, 'SENT');
+    assert.equal(rep2.voucherCode, 'ORIG_VOUCHER');
   });
 
 });
