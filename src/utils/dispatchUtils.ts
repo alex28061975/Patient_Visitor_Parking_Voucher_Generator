@@ -692,5 +692,48 @@ export function resolveEditRecordStatus(
   return "PENDING";
 }
 
+export interface ClipboardWriteSession {
+  writePromise: Promise<void> | null;
+  resolveBlob: (blob: Blob) => void;
+  rejectBlob: (err: unknown) => void;
+}
+
+/**
+ * Synchronously initiates a clipboard PNG write on the current click tick
+ * using a deferred Blob promise so browser transient user activation is preserved
+ * across downstream async lookups, QR generation, and database mutations.
+ */
+export function startQrClipboardWrite(): ClipboardWriteSession {
+  let resolveBlob: (blob: Blob) => void = () => {};
+  let rejectBlob: (err: unknown) => void = () => {};
+
+  const qrBlobPromise = new Promise<Blob>((resolve, reject) => {
+    resolveBlob = resolve;
+    rejectBlob = reject;
+  });
+  // Attach noop catch so rejecting before ClipboardItem consumes it never causes unhandled rejections
+  qrBlobPromise.catch(() => {});
+
+  if (
+    typeof navigator === "undefined" ||
+    !navigator.clipboard ||
+    typeof navigator.clipboard.write !== "function" ||
+    typeof ClipboardItem === "undefined"
+  ) {
+    return { writePromise: null, resolveBlob, rejectBlob };
+  }
+
+  try {
+    const writePromise = navigator.clipboard.write([
+      new ClipboardItem({ "image/png": qrBlobPromise }),
+    ]);
+    writePromise.catch(() => {});
+    return { writePromise, resolveBlob, rejectBlob };
+  } catch (err) {
+    console.warn("Clipboard write initiation error:", err);
+    return { writePromise: null, resolveBlob, rejectBlob };
+  }
+}
+
 
 

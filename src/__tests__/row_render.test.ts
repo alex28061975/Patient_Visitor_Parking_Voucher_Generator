@@ -408,7 +408,7 @@ describe('DispatchCentre Row Render & Replacement Lock Test Suite (row_render.te
     assert.equal(rowCompleted.textContent?.includes('REPLACEMENT'), false, 'Scenario D: REPLACEMENT badge is cleared despite stale form data');
   });
 
-  it('Scenario E: Local-only replacement assignment on already-SENT permit', async () => {
+  it('Scenario E: Replacement state authoritative on permit record (negative for stale formData, positive for saved record)', async () => {
     setupJsdom();
     const React = await import('react');
     const ReactDOMClient = await import('react-dom/client');
@@ -419,16 +419,16 @@ describe('DispatchCentre Row Render & Replacement Lock Test Suite (row_render.te
     document.body.appendChild(container);
     const root = ReactDOMClient.createRoot(container);
 
-    const permitLocalOnly = {
+    const permitWithoutRep = {
       ...permitBase,
       voucherCode: 'OLD_CODE_1',
       replacementCode: undefined,
       status: 'SENT'
     };
 
-    const keys = [getRecordPrimaryKey(permitLocalOnly), ...getRecordKeys(permitLocalOnly)].filter(Boolean) as string[];
+    const keys = [getRecordPrimaryKey(permitWithoutRep), ...getRecordKeys(permitWithoutRep)].filter(Boolean) as string[];
 
-    const localFormData = {
+    const staleFormData = {
       id: '1',
       formId: '100',
       vrm: 'AB12CDE',
@@ -438,16 +438,17 @@ describe('DispatchCentre Row Render & Replacement Lock Test Suite (row_render.te
       emailTemplate: 'replacement' as const
     };
 
+    // Negative test: stale formData replacementCode alone does NOT show REPLACEMENT when permit record has no replacementCode
     await act(async () => {
       root.render(
         React.createElement(DispatchCentre, {
-          database: [permitLocalOnly],
+          database: [permitWithoutRep],
           vouchersDatabase: [{ code: 'NEW_REP_999', validFrom: '2026-11-04', validTo: '2026-11-10', status: 'active' }],
           dispatchedKeys: keys,
           unsentKeys: [],
           dateRangeFilter: 'all',
           processingDate: '2026-11-04',
-          formData: localFormData,
+          formData: staleFormData,
           onSelectRecord: () => {},
           onResendRecord: () => {},
           onUnsendRecord: () => {}
@@ -457,52 +458,25 @@ describe('DispatchCentre Row Render & Replacement Lock Test Suite (row_render.te
 
     let row = Array.from(container.querySelectorAll('tr')).find(tr => tr.textContent?.includes('AB12CDE'));
     assert.ok(row, 'Row exists');
-    assert.ok(row.textContent?.includes('REPLACEMENT'), 'Scenario E1: Local-only replacement shows REPLACEMENT');
-    assert.ok(row.textContent?.includes('Resend'), 'Scenario E1: Local-only replacement shows Resend');
+    assert.equal(row.textContent?.includes('REPLACEMENT'), false, 'Scenario E (Negative): Stale formData replacement does not show REPLACEMENT');
+    assert.equal(row.textContent?.includes('Resend'), false, 'Scenario E (Negative): Stale formData replacement does not show Resend');
 
-    // Simulate database refresh / re-render where database record still has no replacementCode
-    await act(async () => {
-      root.render(
-        React.createElement(DispatchCentre, {
-          database: [permitLocalOnly],
-          vouchersDatabase: [{ code: 'NEW_REP_999', validFrom: '2026-11-04', validTo: '2026-11-10', status: 'active' }],
-          dispatchedKeys: keys,
-          unsentKeys: [],
-          dateRangeFilter: 'all',
-          processingDate: '2026-11-04',
-          formData: localFormData,
-          onSelectRecord: () => {},
-          onResendRecord: () => {},
-          onUnsendRecord: () => {}
-        })
-      );
-    });
-
-    row = Array.from(container.querySelectorAll('tr')).find(tr => tr.textContent?.includes('AB12CDE'));
-    assert.ok(row, 'Row exists');
-    assert.ok(row.textContent?.includes('REPLACEMENT'), 'Scenario E2: REPLACEMENT remains visible after refresh');
-    assert.ok(row.textContent?.includes('Resend'), 'Scenario E2: Resend remains visible after refresh');
-
-    // Simulate successful resend cleanup
-    const permitCompletedLocal = {
-      ...permitLocalOnly,
-      voucherCode: 'NEW_REP_999',
-      replacementCode: undefined,
-      isResend: false,
-      emailType: undefined,
-      emailTemplate: undefined
+    // Positive test: genuinely saved permit record with pending replacementCode displays REPLACEMENT + Resend
+    const permitWithSavedRep = {
+      ...permitWithoutRep,
+      replacementCode: 'NEW_REP_999'
     };
 
     await act(async () => {
       root.render(
         React.createElement(DispatchCentre, {
-          database: [permitCompletedLocal],
+          database: [permitWithSavedRep],
           vouchersDatabase: [{ code: 'NEW_REP_999', validFrom: '2026-11-04', validTo: '2026-11-10', status: 'active' }],
           dispatchedKeys: keys,
           unsentKeys: [],
           dateRangeFilter: 'all',
           processingDate: '2026-11-04',
-          formData: localFormData,
+          formData: staleFormData,
           onSelectRecord: () => {},
           onResendRecord: () => {},
           onUnsendRecord: () => {}
@@ -512,9 +486,11 @@ describe('DispatchCentre Row Render & Replacement Lock Test Suite (row_render.te
 
     row = Array.from(container.querySelectorAll('tr')).find(tr => tr.textContent?.includes('AB12CDE'));
     assert.ok(row, 'Row exists');
-    assert.ok(row.textContent?.includes('SENT'), 'Scenario E3: Successful resend changes row to SENT');
-    assert.ok(row.textContent?.includes('Unsend'), 'Scenario E3: Successful resend changes row to Unsend');
-    assert.equal(row.textContent?.includes('REPLACEMENT'), false, 'Scenario E3: REPLACEMENT badge is not shown');
+    assert.ok(row.textContent?.includes('REPLACEMENT'), 'Scenario E (Positive): Saved permit record with replacementCode shows REPLACEMENT');
+    assert.ok(row.textContent?.includes('Resend'), 'Scenario E (Positive): Saved permit record with replacementCode shows Resend');
+
+    await act(async () => root.unmount());
+    container.remove();
   });
 
   it('Scenario F: Selecting a SENT row with stale legacy replacement flags does not activate replacement', async () => {

@@ -60,10 +60,9 @@ import {
   safeParseDateToTimestamp,
   safeParseDMYToISO
 } from "../utils/csvParser";
-import { checkIsRecordDispatched, isRecordMatch, isPlaceholderVrm, getRecordPrimaryKey, buildReplacementFormUpdate, getRowState } from "../utils/dispatchUtils";
+import { checkIsRecordDispatched, isRecordMatch, isPlaceholderVrm, getRecordPrimaryKey, buildReplacementFormUpdate, getRowState, startQrClipboardWrite, ClipboardWriteSession } from "../utils/dispatchUtils";
 import { isVrmSilentBlockedSync } from "../lib/blocklist";
 import { VoucherCodePicker } from "./VoucherCodePicker";
-// ⭐ FIX: Import canonical date & voucher matching functions from voucherValidation
 import {
   isVoucherForPermitDateRange,
   getVoucherValidFromISO,
@@ -81,7 +80,6 @@ import {
   excludeRecordOwnCodes
 } from "../utils/voucherValidation";
 
-// ⭐ FIX: Re-export helper functions so other files importing from DispatchCentre don't break
 export { isVoucherForPermitDateRange, getSelectableActiveDateCodes };
 
 interface DispatchCentreProps {
@@ -104,8 +102,9 @@ interface DispatchCentreProps {
   searchQuery?: string;
   onSearchQueryChange?: (query: string) => void;
   onSelectRecord: (record: CsvPermitRecord) => void;
-  onSendRecord?: (record: CsvPermitRecord) => Promise<void> | void;
+  onSendRecord?: (record: CsvPermitRecord, clipboardSession?: ClipboardWriteSession) => Promise<void> | void;
   onUnsendRecord?: (record: CsvPermitRecord) => Promise<void> | void;
+  onSaveRecord?: (record: CsvPermitRecord) => Promise<void> | void;
   onBulkEmail?: () => void;
   onClear?: () => void;
   onChangeFormData?: (updates: any) => void;
@@ -116,7 +115,7 @@ interface DispatchCentreProps {
   onBrowseVouchers?: () => void;
   onResetVouchers?: () => Promise<any> | void;
   onEditRecord?: (record: CsvPermitRecord, resolvedCode?: string) => void;
-  onResendRecord?: (record: CsvPermitRecord) => Promise<void> | void;
+  onResendRecord?: (record: CsvPermitRecord, clipboardSession?: ClipboardWriteSession) => Promise<void> | void;
   onPreviewRecord?: (record: CsvPermitRecord) => void;
   emailTracking?: Record<string, { status: "SENT"; sentAt?: string; trackingId?: string }>;
 }
@@ -165,6 +164,7 @@ function DispatchCentreComponent({
   onSelectRecord, 
   onSendRecord, 
   onUnsendRecord, 
+  onSaveRecord,
   onBulkEmail,
   onClear,
   onChangeFormData,
@@ -184,7 +184,6 @@ function DispatchCentreComponent({
   const [localSearchInput, setLocalSearchInput] = useState(initialSearch);
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState(initialSearch);
 
-  // Memoized Sets for fast O(1) dispatch checks across large datasets (~2,000+ records)
   const dispatchedKeysSet = useMemo(
     () => new Set(dispatchedKeys || []),
     [dispatchedKeys]
@@ -195,7 +194,6 @@ function DispatchCentreComponent({
     [unsentKeys]
   );
 
-  // Sync local and debounced input when external searchQueryProp changes
   useEffect(() => {
     if (searchQueryProp !== undefined && searchQueryProp !== localSearchInput) {
       setLocalSearchInput(searchQueryProp);
@@ -203,7 +201,6 @@ function DispatchCentreComponent({
     }
   }, [searchQueryProp]);
 
-  // 150ms debounce for filtering/search state update
   useEffect(() => {
     if (localSearchInput === debouncedSearchQuery) return;
     const timer = setTimeout(() => {
@@ -219,7 +216,6 @@ function DispatchCentreComponent({
 
   const handleSearchChange = (val: string) => {
     setLocalSearchInput(val);
-    // Immediate clear support
     if (!val) {
       setDebouncedSearchQuery("");
       if (isControlled && onSearchQueryChange) {
@@ -236,16 +232,20 @@ function DispatchCentreComponent({
   const [wardDropdownOpen, setWardDropdownOpen] = useState(false);
   const [selectedRowRecord, setSelectedRowRecord] = useState<CsvPermitRecord | null>(null);
   const [isReplacingCode, setIsReplacingCode] = useState(false);
+  const [replacementDraftsByRecord, setReplacementDraftsByRecord] = useState<Record<string, { code: string; originalCode?: string }>>({});
 
-  // Keep selectedRowRecord up to date with latest database updates
+  const getReplacementDraftKey = useCallback((record?: CsvPermitRecord | null) => {
+    if (!record) return "";
+    const key = getRecordPrimaryKey(record) || record.formId || record.id || record.vrm;
+    return key === undefined || key === null ? "" : String(key);
+  }, []);
+
   useEffect(() => {
     if (selectedRowRecord && database) {
       const updated = database.find(r => isRecordMatch(r, selectedRowRecord));
       if (updated) {
         setSelectedRowRecord(prev => {
           if (!prev) return null;
-          // Keep replacement workflow state out of passive row-selection hydration.
-          // Explicit Choose a code / EDIT actions update replacementCode separately.
           const {
             replacementCode: _ignoredReplacementCode,
             originalVoucherCode: _ignoredOriginalVoucherCode,
@@ -264,12 +264,10 @@ function DispatchCentreComponent({
   }, [database, dispatchedKeysSet, unsentKeysSet]);
 
   const handleRowClick = (record: CsvPermitRecord) => {
-    // Passive selection only. Do not read, clear, or set replacement workflow state here.
     setSelectedRowRecord(record);
     onSelectRecord(record);
   };
 
-  // Target ISO for Active Date Codes dropdown
   const targetIso = useMemo(() => {
     if (formData) {
       const permitIso = getRequestedPermitDateISO(formData as any);
@@ -288,7 +286,6 @@ function DispatchCentreComponent({
     return getTodayISO();
   }, [formData?.validFrom, formData?.dateRequired, formData?.startTime, formData?.createdAt, formData?.todayDate, processingDate]);
 
-
   const [blocklistVersion, setBlocklistVersion] = useState<number>(0);
   useEffect(() => {
     const handleBlocklistUpdate = () => {
@@ -298,12 +295,10 @@ function DispatchCentreComponent({
     return () => window.removeEventListener("blocklist_updated", handleBlocklistUpdate);
   }, []);
 
-  // Base records
   const baseRecords = useMemo(() => {
     return sortRecordsByFormIdDesc(database);
   }, [database]);
 
-  // ⭐ Pre-compute record cancellation status once per database & processingDate update
   const recordCancellationMap = useMemo(() => {
     const map = new WeakMap<object, boolean>();
     (database || []).forEach(record => {
@@ -336,7 +331,6 @@ function DispatchCentreComponent({
     return map;
   }, [database, processingDate]);
 
-  // ⭐ Pre-compute target local timestamps once per database & processingDate update
   const recordTimestampMap = useMemo(() => {
     const map = new WeakMap<object, number | null>();
 
@@ -426,7 +420,6 @@ function DispatchCentreComponent({
     return map;
   }, [database, processingDate]);
 
-  // Compute dynamic voucher allocations map
   const recordCodeMap = useMemo(() => {
     return getSpreadsheetMatchingAllocationsMap(
       baseRecords,
@@ -437,11 +430,9 @@ function DispatchCentreComponent({
     );
   }, [baseRecords, database, processingDate, vouchersDatabase, customVouchers, blocklistVersion]);
 
-  // Assigned voucher codes set across the concessions database, custom allocations, AND recordCodeMap
   const assignedVoucherCodesSet = useMemo(() => {
     const set = new Set<string>();
 
-    // 1. Include allocations from recordCodeMap (canonical allocation source)
     if (recordCodeMap) {
       recordCodeMap.forEach((code) => {
         if (code && typeof code === "string") {
@@ -453,13 +444,11 @@ function DispatchCentreComponent({
       });
     }
 
-    // 2. Include database records and index by ID/formId for O(1) customVouchers lookup
     const dbRecordByIdMap = new Map<string, CsvPermitRecord>();
     (database || []).forEach(rec => {
       if (rec.formId !== undefined && rec.formId !== null) dbRecordByIdMap.set(String(rec.formId), rec);
       if (rec.id !== undefined && rec.id !== null) dbRecordByIdMap.set(String(rec.id), rec);
 
-      // Cancelled or blocked permits MUST NOT consume a voucher - they release their codes back to inventory
       const isBlocked = isVrmSilentBlockedSync(rec.vrm);
       const isCancelled = recordCancellationMap.has(rec)
         ? recordCancellationMap.get(rec)!
@@ -478,8 +467,6 @@ function DispatchCentreComponent({
         }
       }
 
-      // IMPORTANT: replacement does not release the original assigned voucher.
-      // Keep every live assignment consumed until its record is genuinely cancelled.
       const assignedCodeFields = [
         rec.originalVoucherCode,
         rec.voucherCode,
@@ -496,7 +483,6 @@ function DispatchCentreComponent({
       });
     });
 
-    // Also include active replacement/original codes from formData while replacement is in progress.
     [formData?.originalVoucherCode, formData?.replacementCode].forEach((raw) => {
       if (raw === null || raw === undefined || raw === "") return;
 
@@ -506,7 +492,6 @@ function DispatchCentreComponent({
       }
     });
 
-    // 3. Include customVouchers (using O(1) indexed lookup)
     if (customVouchers) {
       Object.entries(customVouchers).forEach(([key, raw]) => {
         if (raw && typeof raw === "string") {
@@ -531,7 +516,6 @@ function DispatchCentreComponent({
     return set;
   }, [database, customVouchers, processingDate, recordCodeMap, formData?.replacementCode, formData?.originalVoucherCode]);
 
-  // Active record is either the explicitly clicked row, or matching record from formData, or the first record in database
   const activeRecord = useMemo<CsvPermitRecord | null>(() => {
     if (selectedRowRecord) {
       const updated = (database || []).find(r => isRecordMatch(r, selectedRowRecord));
@@ -555,7 +539,6 @@ function DispatchCentreComponent({
     return database?.[0] || null;
   }, [selectedRowRecord, formData, database, dispatchedKeysSet, unsentKeysSet]);
 
-  // Current permit exact validFrom and validTo ISO matching for the selected row using getPermitVoucherWindow
   const voucherWindow = useMemo(() => {
     return getPermitVoucherWindow(activeRecord);
   }, [activeRecord]);
@@ -563,7 +546,6 @@ function DispatchCentreComponent({
   const currentPermitValidFromIso = voucherWindow.fromISO;
   const currentPermitValidToIso = voucherWindow.toISO;
 
-  // ⭐ Pre-index vouchersDatabase by voucher code and validity period for O(1) lookups
   const voucherIndex = useMemo(() => {
     const codeMap = new Map<string, ParsedVoucherData[]>();
     const periodMap = new Map<string, ParsedVoucherData[]>();
@@ -611,7 +593,6 @@ function DispatchCentreComponent({
     return { codeMap, periodMap, undatedList, getVouchersForDateRange };
   }, [vouchersDatabase]);
 
-  // Helper to check if a voucher matches the permit's validity period
   const hasDatedVouchersForDate = useMemo(() => {
     if (!vouchersDatabase || vouchersDatabase.length === 0 || !currentPermitValidFromIso) return false;
     return voucherIndex.getVouchersForDateRange(currentPermitValidFromIso, currentPermitValidToIso).length > 0;
@@ -621,7 +602,6 @@ function DispatchCentreComponent({
     return isVoucherForPermitDateRange(v, currentPermitValidFromIso, currentPermitValidToIso);
   }, [currentPermitValidFromIso, currentPermitValidToIso]);
 
-  // Unused vouchers computation for the active date using getSelectableActiveDateCodes
   const unusedVouchersForDay = useMemo<ParsedVoucherData[]>(() => {
     if (!currentPermitValidFromIso || !vouchersDatabase || vouchersDatabase.length === 0) {
       return [];
@@ -648,7 +628,6 @@ function DispatchCentreComponent({
     return excludeRecordOwnCodes(unusedVouchersForDay, activeRecord || selectedRowRecord);
   }, [unusedVouchersForDay, activeRecord, selectedRowRecord]);
 
-  // Exact range voucher stock metrics for Active Date Codes dropdown badge
   const totalForThisRange = useMemo(() => {
     if (!currentPermitValidFromIso || !vouchersDatabase || vouchersDatabase.length === 0) {
       return 0;
@@ -663,71 +642,86 @@ function DispatchCentreComponent({
     : 0;
   const isRangeStockLow = totalForThisRange === 0 || remainingForThisRange <= 5 || percentRemaining <= 5;
 
-
   const voucherSummary = useMemo(() => {
     const todayIso = new Date().toISOString().substring(0, 10);
     const w = getPermitVoucherWindow(activeRecord);
     return getVoucherInventorySummary(vouchersDatabase, assignedVoucherCodesSet, w.fromISO, w.toISO, todayIso);
   }, [vouchersDatabase, assignedVoucherCodesSet, activeRecord]);
 
-  const handleActiveDateCodeSelect = useCallback((codeStr: string) => {
+  const handleActiveDateCodeSelect = useCallback(async (codeStr: string) => {
     const selectedCode = cleanVoucherCodeValue(codeStr).toUpperCase();
     if (!selectedCode || selectedCode === "-" || selectedCode === "CANCELLED") {
       return;
     }
 
     const currentRec = activeRecord || selectedRowRecord;
-    const assignedSet = buildAssignedCodeSet(database, currentRec);
+    if (!currentRec) {
+      setAssignmentError("Select a permit row before choosing a replacement code");
+      setTimeout(() => setAssignmentError(null), 4000);
+      return;
+    }
 
+    const assignedSet = buildAssignedCodeSet(database, currentRec);
     if (assignedSet.has(selectedCode)) {
       setAssignmentError(`${selectedCode} is no longer available`);
       setTimeout(() => setAssignmentError(null), 4000);
       return;
     }
+
     setAssignmentError(null);
     setIsReplacingCode(true);
 
-    const originalVoucherCode = currentRec?.originalVoucherCode || currentRec?.voucherCode || currentRec?.prePaidCode;
+    const draftKey = getReplacementDraftKey(currentRec);
+    const previousDraft = draftKey ? replacementDraftsByRecord[draftKey] : undefined;
+    const originalVoucherCode = currentRec.originalVoucherCode || previousDraft?.originalCode || currentRec.voucherCode || currentRec.prePaidCode;
 
-    if (currentRec) {
-      setSelectedRowRecord({
-        ...currentRec,
-        originalVoucherCode: originalVoucherCode || currentRec.originalVoucherCode,
-        replacementCode: selectedCode,
-        voucherCodesText: selectedCode,
-        status: "Pending",
-        isResend: true,
-        emailType: "RESEND_CONCESSION",
-        emailTemplate: "replacement"
-      });
+    if (draftKey) {
+      setReplacementDraftsByRecord(prev => ({
+        ...prev,
+        [draftKey]: { code: selectedCode, originalCode: originalVoucherCode || undefined }
+      }));
     }
 
+    const updatedRecord = {
+      ...currentRec,
+      originalVoucherCode: originalVoucherCode || currentRec.originalVoucherCode,
+      replacementCode: selectedCode,
+      voucherCodesText: selectedCode,
+      status: currentRec.status,
+      isResend: true,
+      emailType: "RESEND_CONCESSION",
+      emailTemplate: "replacement"
+    };
+
+    setSelectedRowRecord(updatedRecord);
     onChangeFormData?.(buildReplacementFormUpdate(currentRec, selectedCode) as any);
 
-    setTimeout(() => {
+    try {
+      if (onSaveRecord) {
+        await onSaveRecord(updatedRecord);
+      }
+    } catch (err) {
+      console.error("Failed to save replacement record:", err);
+      setAssignmentError("Failed to save replacement code");
+      setTimeout(() => setAssignmentError(null), 4000);
+    } finally {
       setIsReplacingCode(false);
-    }, 600);
-  }, [activeRecord, selectedRowRecord, database, onChangeFormData]);
+    }
+  }, [activeRecord, selectedRowRecord, database, onChangeFormData, getReplacementDraftKey, replacementDraftsByRecord, onSaveRecord]);
 
   const handleActiveDateCodeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     handleActiveDateCodeSelect(e.target.value);
   };
 
-  // Sorting state
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>(null);
 
-  // Dropdown filter states
   const [statusFilter, setStatusFilter] = useState<"ALL" | "PENDING" | "SENT" | "CANCELLED" | "BLOCKED" | "REPLACEMENT">("ALL");
   const [hospitalFilter, setHospitalFilter] = useState<string>("ALL");
   const [wardFilter, setWardFilter] = useState<string>("ALL");
-  // ⭐ FIX: Restore default filter to "This Week"
   const [dateFilter, setDateFilter] = useState<"ALL" | "TODAY" | "THIS_WEEK" | "THIS_MONTH" | "CUSTOM">("THIS_WEEK");
 
   useEffect(() => {
-    // Don't let the parent's fetch-range prop clobber a local "Today" or "Custom Range"
-    // selection — both legitimately map to onDateRangeFilterChange("all") for data-fetching
-    // purposes, but that shouldn't reset the user's actual filter choice back to "ALL".
     if (dateFilter === "TODAY" || dateFilter === "CUSTOM") return;
     if (dateRangeFilter === "7days") setDateFilter("THIS_WEEK");
     else if (dateRangeFilter === "30days") setDateFilter("THIS_MONTH");
@@ -736,7 +730,6 @@ function DispatchCentreComponent({
   const [customStartDate, setCustomStartDate] = useState<string>("");
   const [customEndDate, setCustomEndDate] = useState<string>("");
 
-  // Pagination state
   const [pageSize, setPageSize] = useState<number>(50);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [goToPageInput, setGoToPageInput] = useState<string>("");
@@ -752,26 +745,52 @@ function DispatchCentreComponent({
     return false;
   }, [selectedRowRecord, formData]);
 
-    const isReplacementPending = useCallback((record: CsvPermitRecord) => {
-    if (!record) return false;
+  const getPendingReplacementCode = useCallback((record: CsvPermitRecord) => {
+    if (!record) return "";
 
-    // A replacement is only PENDING if a replacement code is currently set but not yet completed/sent,
-    // or if the record currently being edited in formData has a replacement pending.
-    const isDispatched = checkIsRecordDispatched(record, record.vrm, record.driverName, record.dateRequired, dispatchedKeysSet, unsentKeysSet);
-
-    // If already dispatched and no uncommitted replacement code draft is pending, it's SENT, not pending replacement!
-    if (isDispatched && !record.replacementCode && !formData?.replacementCode) {
-      return false;
-    }
-
+    const draftKey = getReplacementDraftKey(record);
+    const localDraft = draftKey ? replacementDraftsByRecord[draftKey] : undefined;
+    const matchesSelectedRow = Boolean(selectedRowRecord && isRecordMatch(record, selectedRowRecord));
     const matchesForm = Boolean(formData && isRecordMatch(record, formData));
-    const hasUnsentReplacement = Boolean(
-      record.replacementCode ||
-      (matchesForm && formData?.replacementCode)
+
+    const candidates = [
+      matchesSelectedRow ? selectedRowRecord?.replacementCode : undefined,
+      localDraft?.code,
+      record.replacementCode,
+      matchesForm ? formData?.replacementCode : undefined,
+    ];
+    const activeCode = cleanVoucherCodeValue(
+      String(record.voucherCode || record.prePaidCode || record.voucherCodesText || "")
+    ).toUpperCase();
+
+    // Check if an active resend/replacement workflow is flagged
+    const isResendActive = Boolean(
+      record.isResend || 
+      record.emailTemplate === "replacement" || 
+      localDraft || 
+      (matchesSelectedRow && selectedRowRecord?.isResend) ||
+      (matchesForm && (formData?.isResend || formData?.emailTemplate === "replacement"))
     );
 
-    return hasUnsentReplacement;
-  }, [formData, dispatchedKeysSet, unsentKeysSet]);
+    for (const rawCandidate of candidates) {
+      if (rawCandidate === null || rawCandidate === undefined || rawCandidate === "") continue;
+      const candidate = cleanVoucherCodeValue(String(rawCandidate)).toUpperCase();
+      if (!candidate || candidate === "-" || candidate === "CANCELLED") continue;
+
+      // Only skip if activeCode matches candidate AND there is no active resend draft/flag
+      if (activeCode && activeCode === candidate && !isResendActive) {
+        continue;
+      }
+      return candidate;
+    }
+
+    return "";
+  }, [formData, selectedRowRecord, getReplacementDraftKey, replacementDraftsByRecord]);
+
+  const isReplacementPending = useCallback((record: CsvPermitRecord) => {
+    if (!record) return false;
+    return Boolean(getPendingReplacementCode(record));
+  }, [getPendingReplacementCode]);
 
   const getHospital = useCallback((record: CsvPermitRecord) => {
     const raw = String(record?.hospital ?? "").trim();
@@ -786,7 +805,6 @@ function DispatchCentreComponent({
     ) ? "Whipps Cross Hospital" : "Newham Hospital";
   }, []);
 
-  // Selected site/hospital resolution
   const selectedHospital = useMemo(() => {
     if (hospitalFilter && hospitalFilter !== "ALL") {
       return hospitalFilter;
@@ -803,20 +821,6 @@ function DispatchCentreComponent({
     return "";
   }, [hospitalFilter, formData?.hospitalSite, formData?.hospital, activeRecord]);
 
-  // Voucher Inventory Expiry & Warning Badge:
-  // 1. Color Threshold Rules:
-  //    - Green (> 3 days remaining): "🟢 Codes Valid Until: DD/MM/YYYY (X days left)"
-  //    - Amber (1 to 3 days remaining): "⚠️ Voucher Batch Expiring Soon: DD/MM/YYYY (X days left)"
-  //    - Red (0 days or batch expired): "🔴 No Active Codes Available — Add New Batch"
-  // 2. Strict Date Calculation:
-  //    Ensure current date is dynamically generated using new Date() anchored to system's current date (28/09/2026).
-  //    const today = new Date(); today.setHours(0, 0, 0, 0);
-  //    const targetDate = new Date(activeCode.validFrom); targetDate.setHours(0, 0, 0, 0);
-  //    const daysLeft = Math.round((targetDate.getTime() - today.getTime()) / (1000 * 3600 * 24));
-  //    With 2 days left (30/09/2026 - 28/09/2026), evaluates to Amber:
-  //    "⚠️ Voucher Batch Expiring Soon: 30/09/2026 (2 days left)"
-  // 3. Layout Constraint:
-  //    Keep "Active Date Codes ({count}):", select dropdown, and badge on a single row (flex flex-row items-center whitespace-nowrap).
   const voucherBatchBadge = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -842,7 +846,7 @@ function DispatchCentreComponent({
       if (record.isCancelled === true) return true;
       if (typeof record.status === "string" && record.status.trim().toLowerCase().includes("cancel")) return true;
       if (record.isCancelled === false && String(record.status || "").trim().toUpperCase() === "ACTIVE") {
-        // Explicitly active record: do not let stale CANCELLED string in voucherCode override active status
+        // Explicitly active record
       } else if (
         record.voucherCode === "CANCELLED" ||
         record.voucherCodesText === "CANCELLED" ||
@@ -866,7 +870,6 @@ function DispatchCentreComponent({
     return getRowState({ isBlocked: false, isCancelled: false, isDispatched, replacementPending: isReplacementPending(record) }).status;
   }, [getIsCancelled, dispatchedKeysSet, unsentKeysSet, isReplacementPending]);
 
-  // Dynamic stock cache keyed by date range, automatically invalidated when assigned codes or vouchers change
   const rowVoucherStatsCache = useMemo(() => {
     return new Map<string, { total: number; remaining: number }>();
   }, [vouchersDatabase, assignedVoucherCodesSet]);
@@ -907,26 +910,21 @@ function DispatchCentreComponent({
 
   const todayISO = useMemo(() => getTodayISO(), []);
 
-  // Standardized local-time date boundaries (prevents UTC timezone offsets from shifting today)
   const localDateBounds = useMemo(() => {
     const now = new Date();
     const currentYear = now.getFullYear();
     const currentMonth = now.getMonth();
     const currentDate = now.getDate();
 
-    // Start-of-day (00:00:00.000) and End-of-day (23:59:59.999) using local Date construction
     const todayStartDate = new Date(currentYear, currentMonth, currentDate, 0, 0, 0, 0);
     const todayEndDate = new Date(currentYear, currentMonth, currentDate, 23, 59, 59, 999);
 
-    // This Week: 6 days prior (00:00:00) through end of today (23:59:59.999)
     const thisWeekStartDate = new Date(currentYear, currentMonth, currentDate - 6, 0, 0, 0, 0);
     const thisWeekEndDate = new Date(currentYear, currentMonth, currentDate, 23, 59, 59, 999);
 
-    // This Month: 29 days prior (00:00:00) through end of today (23:59:59.999)
     const thisMonthStartDate = new Date(currentYear, currentMonth, currentDate - 29, 0, 0, 0, 0);
     const thisMonthEndDate = new Date(currentYear, currentMonth, currentDate, 23, 59, 59, 999);
 
-    // Custom date range bounds in local time
     let customStartDateObj: Date | null = null;
     if (customStartDate) {
       const parsedStart = safeParseDateToTimestamp(customStartDate);
@@ -999,8 +997,6 @@ function DispatchCentreComponent({
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [database]);
 
-  // Repeat User Submissions Index: O(N) build on database changes, O(1) row lookup.
-  // Email is the canonical identity; normalized name is used only when email is unavailable.
   const { userSubmissionsMap, recordToUserMap } = useMemo(() => {
     type UserSubmissionEntry = {
       identifier: string;
@@ -1097,10 +1093,8 @@ function DispatchCentreComponent({
     pageSize
   ]);
 
-  // Stable key for replacement status in formData to avoid refiltering on unrelated form edits
   const formDataReplacementKey = `${formData?.id || formData?.formId || formData?.vrm || ''}_${formData?.replacementCode || ''}_${formData?.emailType || ''}_${formData?.isResend || ''}_${formData?.emailTemplate || ''}`;
 
-  // ⭐ STEP 1: Filter first in O(N) linear scan
   const filteredRecords = useMemo(() => {
     const cleanSearchQuery = (searchQuery && searchQuery.trim()) ? searchQuery.trim().toLowerCase() : "";
     const cleanHospitalFilter = hospitalFilter !== "ALL" ? hospitalFilter.toLowerCase().trim() : "";
@@ -1194,10 +1188,11 @@ function DispatchCentreComponent({
     recordTimestampMap,
     dispatchedKeysSet,
     unsentKeysSet,
-    formDataReplacementKey
+    formDataReplacementKey,
+    getStatusStr,
+    replacementDraftsByRecord
   ]);
 
-  // ⭐ STEP 2: Sort filtered records using pre-decorated keys in O(M log M) without indexOf
   const sortedRecords = useMemo(() => {
     if (!sortKey || !sortDirection) {
       return filteredRecords;
@@ -1290,7 +1285,9 @@ function DispatchCentreComponent({
     recordCodeMap,
     dispatchedKeysSet,
     unsentKeysSet,
-    formDataReplacementKey
+    formDataReplacementKey,
+    isReplacementPending,
+    replacementDraftsByRecord
   ]);
 
   const handleSort = (key: SortKey) => {
@@ -1403,7 +1400,6 @@ function DispatchCentreComponent({
   const startIndex = totalFilteredCount === 0 ? 0 : (safePage - 1) * effectivePageSize;
   const endIndex = Math.min(startIndex + effectivePageSize, totalFilteredCount);
 
-  // Lightweight zero-dependency row virtualization when "ALL" (pageSize === 0) is selected
   const isAllMode = pageSize === 0;
   const virtualizer = useTableVirtualizer({
     totalCount: sortedRecords.length,
@@ -1463,15 +1459,45 @@ function DispatchCentreComponent({
 
   const availableWards = allWardsList;
 
-    const handleAction = async (record: CsvPermitRecord, sent: boolean, replacement = false) => {
+  const handleAction = async (record: CsvPermitRecord, sent: boolean, replacement = false, cancelled = false) => {
+    // Initiate clipboard write synchronously on the click tick before any awaits
+    const isBlockedRow = isVrmSilentBlockedSync(record?.vrm);
+    const isCancelledRow = Boolean(cancelled || recordCancellationMap.get(record));
+    const shouldCopyQr = !isBlockedRow && !isCancelledRow && (replacement || !sent);
+    const clipboardSession = shouldCopyQr ? startQrClipboardWrite() : undefined;
+
     const key = String(record.formId ?? record.id ?? record.vrm);
     setBusyKey(key);
     try {
       if (replacement) {
+        const replacementCode = getPendingReplacementCode(record);
+        const draftKey = getReplacementDraftKey(record);
+        const localDraft = draftKey ? replacementDraftsByRecord[draftKey] : undefined;
+        const matchesForm = Boolean(formData && isRecordMatch(record, formData));
+        const resendRecord = {
+          ...record,
+          replacementCode: replacementCode || record.replacementCode,
+          originalVoucherCode: record.originalVoucherCode || localDraft?.originalCode || (matchesForm ? formData?.originalVoucherCode : undefined),
+          voucherCodesText: replacementCode || record.voucherCodesText,
+          isResend: true,
+          emailType: "RESEND_CONCESSION",
+          emailTemplate: "replacement"
+        } as CsvPermitRecord;
+
         if (onResendRecord) {
-          await onResendRecord(record);
+          await onResendRecord(resendRecord, clipboardSession);
+        } else if (onSendRecord) {
+          await onSendRecord(resendRecord, clipboardSession);
         } else {
-          await onSendRecord?.(record);
+          clipboardSession?.rejectBlob(new Error("No resend handler available"));
+        }
+        if (draftKey) {
+          setReplacementDraftsByRecord(prev => {
+            if (!prev[draftKey]) return prev;
+            const next = { ...prev };
+            delete next[draftKey];
+            return next;
+          });
         }
         setSelectedRowRecord(prev => {
           if (!prev || !isRecordMatch(prev, record)) return prev;
@@ -1498,7 +1524,11 @@ function DispatchCentreComponent({
         }
       }
       else if (sent) await onUnsendRecord?.(record);
-      else await onSendRecord?.(record);
+      else if (onSendRecord) await onSendRecord(record, clipboardSession);
+      else clipboardSession?.rejectBlob(new Error("No send handler available"));
+    } catch (err) {
+      clipboardSession?.rejectBlob(err);
+      throw err;
     } finally {
       setBusyKey(null);
     }
@@ -1524,10 +1554,8 @@ function DispatchCentreComponent({
 
   return (
     <section className="w-full bg-white dark:bg-[#030C1B] border border-slate-200 dark:border-[#0D223C] rounded-2xl p-4 md:p-6 shadow-2xl text-slate-700 dark:text-slate-200 transition-colors">
-      {/* Top Header Section */}
       <div className="flex flex-col gap-3 pb-4 border-b border-slate-200 dark:border-[#0D223C]">
         <div className="flex flex-wrap xl:flex-nowrap items-center justify-between gap-3 w-full pb-0.5">
-          {/* Left: Logo & Title */}
           <div className="flex items-center gap-3 shrink-0">
             <div className="w-8 h-8 rounded-full bg-[#1877F2] flex items-center justify-center shadow-md shadow-blue-500/20 text-white shrink-0">
               <Navigation className="w-4 h-4 fill-white text-white" />
@@ -1537,7 +1565,6 @@ function DispatchCentreComponent({
             </h2>
           </div>
 
-          {/* Center: Concessions & Vouchers Buttons with Counts */}
           <div className="flex items-center justify-center gap-2 flex-nowrap xl:flex-1 xl:min-w-0">
             <button
               type="button"
@@ -1565,14 +1592,11 @@ function DispatchCentreComponent({
             </button>
           </div>
 
-          {/* Right Group: ml-auto / flex */}
           <div className="flex flex-wrap items-center justify-end gap-2.5 ml-auto xl:ml-0 whitespace-nowrap shrink-0">
-            {/* Permit label */}
             <span className="text-xs font-semibold px-2.5 py-1 rounded-md bg-slate-100 dark:bg-[#07152b] border border-slate-200 dark:border-[#132A4A] text-slate-800 dark:text-slate-200">
               {activeRecord ? `For #${activeRecord.formId || activeRecord.id} · ${activeRecord.vrm || 'No VRM'}` : "No permit selected"}
             </span>
 
-            {/* Window chip */}
             {(() => {
               const w = getPermitVoucherWindow(activeRecord);
               const fromUK = formatDateUK(w.fromISO);
@@ -1589,7 +1613,6 @@ function DispatchCentreComponent({
               );
             })()}
 
-            {/* Stock count + bar */}
             {(() => {
               const availableCount = filteredUnusedVouchers.length;
               const w = getPermitVoucherWindow(activeRecord);
@@ -1615,7 +1638,6 @@ function DispatchCentreComponent({
               );
             })()}
 
-            {/* Code picker */}
             <VoucherCodePicker
               codes={filteredUnusedVouchers}
               onSelect={handleActiveDateCodeSelect}
@@ -1631,7 +1653,6 @@ function DispatchCentreComponent({
               }
             />
 
-            {/* Upload new batch button when available is 0 */}
             {filteredUnusedVouchers.length === 0 && vouchersDatabase.length > 0 && (
               <button
                 type="button"
@@ -1642,7 +1663,6 @@ function DispatchCentreComponent({
               </button>
             )}
 
-            {/* Cover pill */}
             {voucherBatchBadge && (
               <span
                 title={`Vouchers are loaded for permits starting up to ${voucherBatchBadge.formattedDate || ''} (${voucherBatchBadge.daysDiff ?? 0} days of cover)`}
@@ -1661,7 +1681,6 @@ function DispatchCentreComponent({
           </div>
         )}
 
-        {/* Second Row: Search & Filters */}
         <div className="flex flex-col gap-2.5 pt-1">
           <div className="flex flex-wrap items-center gap-2.5">
             <div className="relative flex-1 min-w-[220px]">
@@ -2001,7 +2020,6 @@ function DispatchCentreComponent({
                 const isCancelled = getIsCancelled(record, index);
                 const recordKey = String(record?.formId || record?.id || index);
 
-                // ⭐ FIX: CODES Column & VOUCHER CODE Column - canonical date range matching
                 const permitFromISO = getRequestedPermitDateISO(record) || parseDateToISO(record?.validFrom || record?.dateRequired) || "";
                 const permitToISO = (() => {
                   if (record?.validTo) {
@@ -2038,7 +2056,7 @@ function DispatchCentreComponent({
                 } else if (isCancelled) {
                   displayCode = "CANCELLED";
                 } else if (replacementPending) {
-                  displayCode = record.replacementCode || (isSameSelectedRecord(record) && formData?.voucherCodesText ? formData.voucherCodesText : (recordCodeMap.get(recordKey) || record.voucherCode || "-"));
+                  displayCode = getPendingReplacementCode(record) || (isSameSelectedRecord(record) && formData?.voucherCodesText ? formData.voucherCodesText : (recordCodeMap.get(recordKey) || record.voucherCode || "-"));
                 } else if (displayCode === undefined || displayCode === null || displayCode === "CANCELLED" || displayCode === "BLOCKED") {
                   const cleanVrmStr = record?.vrm ? String(record.vrm).toUpperCase().replace(/\s+/g, "") : "";
                   const hasStableId = Boolean(
@@ -2057,16 +2075,12 @@ function DispatchCentreComponent({
                   ).trim();
                   const cleanRaw = cleanVoucherCodeValue(rawCode).toUpperCase();
                   
-                  // ⭐ O(1) check if code exists in current vouchersDatabase
                   const codeExists = cleanRaw && cleanRaw !== "-" && cleanRaw !== "CANCELLED" && cleanRaw !== "BLOCKED" &&
                     voucherIndex.codeMap.has(cleanRaw);
                   
                   displayCode = codeExists ? rawCode : "-";
                 }
 
-                // Every displayed voucher code must come from the loaded Vouchers.csv
-                // and match this permit's VALIDFROM/VALIDTO range. Never trust a
-                // stale Supabase/custom/replacement value.
                 if (
                   displayCode &&
                   displayCode !== "-" &&
@@ -2107,7 +2121,6 @@ function DispatchCentreComponent({
 
                 const hospitalDisplay = getHospital(record);
 
-                // ⭐ Stale code check using indexed lookup
                 const cleanUpperDisplay = String(displayCode || "").trim().toUpperCase();
                 const candidatesForDisplay = voucherIndex.codeMap.get(cleanUpperDisplay);
                 const isStaleCode = Boolean(
@@ -2118,14 +2131,12 @@ function DispatchCentreComponent({
                   (!candidatesForDisplay || !candidatesForDisplay.some(v => isVoucherForPermitDateRange(v, permitFromISO, permitToISO)))
                 );
                 
-                // ⭐ Instant O(1) memoized voucher stock calculation
                 const { total: totalForRow, remaining: remainingForRow } = getRowVoucherStats(permitFromISO, permitToISO, record?.vrm || "");
                 
                 const percentRemainingRow = totalForRow > 0
                   ? (remainingForRow / totalForRow) * 100
                   : 0;
                 
-                // 🔴 RED if: total=0 OR remaining≤5 OR percentage≤5%
                 const isRowStockLow = totalForRow === 0 || remainingForRow <= 5 || percentRemainingRow <= 5;
 
                 const isSelectedRow = Boolean(activeRecord && isRecordMatch(record, activeRecord));
@@ -2137,7 +2148,7 @@ function DispatchCentreComponent({
                     className={`transition-colors cursor-pointer text-slate-800 dark:text-slate-200 ${
                       isSelectedRow
                         ? "bg-blue-50/80 dark:bg-[#0c2847]/90 font-medium ring-1 ring-inset ring-blue-500/30 dark:ring-blue-400/30"
-                        : "hover:bg-blue-50/50 dark:hover:bg-[#0c233d]/70"
+                        : "hover:bg-blue-50/50 dark:hover:bg-[#0b233d]/70"
                     }`}
                   >
                     <td className="py-3 px-3 text-center text-slate-500 dark:text-slate-400 font-mono font-normal border-r border-slate-100 dark:border-[#102947]/60 whitespace-nowrap text-[10px]">
@@ -2173,7 +2184,7 @@ function DispatchCentreComponent({
                         </span>
                       ) : replacementPending ? (
                         <span className="text-amber-500 bg-amber-500/10 border-amber-500/30 font-bold px-2 py-0.5 rounded border inline-flex items-center gap-1.5">
-                          <span className="inline-block animate-spin text-[10px]">⟳</span>
+                          <RefreshCw className="h-2.5 w-2.5 text-amber-500" aria-hidden="true" />
                           {displayCode || "-"}
                         </span>
                       ) : isStaleCode ? (
@@ -2196,7 +2207,6 @@ function DispatchCentreComponent({
                       )}
                     </td>
 
-                    {/* ⭐ FIXED CODES COLUMN - Shows count, not VRM */}
                     <td className="py-3 px-3 border-r border-slate-100 dark:border-[#102947]/60 whitespace-nowrap text-center text-[10px]">
                       <div className="flex flex-col items-center justify-center gap-1 mx-auto w-[74px]">
                         <div 
@@ -2246,8 +2256,8 @@ function DispatchCentreComponent({
                           CANCELLED
                         </span>
                       ) : replacementPending ? (
-                        <span className="bg-amber-500/15 text-amber-400 border-amber-500/30 border font-bold px-2 py-0.5 rounded text-[9px] tracking-wider uppercase inline-flex items-center justify-center gap-1.5 whitespace-nowrap animate-pulse">
-                          <span className="inline-block animate-spin text-[9px]">⟳</span>
+                        <span className="bg-amber-500/15 text-amber-400 border-amber-500/30 border font-bold px-2 py-0.5 rounded text-[9px] tracking-wider uppercase inline-flex items-center justify-center gap-1.5 whitespace-nowrap">
+                          <RefreshCw className="h-2.5 w-2.5" aria-hidden="true" />
                           REPLACEMENT
                         </span>
                       ) : isDispatched ? (
@@ -2274,10 +2284,6 @@ function DispatchCentreComponent({
                             setSelectedRowRecord(record);
                             onSelectRecord(record);
                             if (onEditRecord) {
-                              // Pass the actually-displayed voucher code (resolved via recordCodeMap),
-                              // not just the raw record.voucherCode field, which is often blank —
-                              // the Edit modal needs the real assigned code to filter it out of
-                              // its own Active Date Codes list correctly.
                               const resolvedCode =
                                 displayCode && displayCode !== "-" && displayCode !== "CANCELLED" && displayCode !== "BLOCKED"
                                   ? displayCode
@@ -2332,7 +2338,7 @@ function DispatchCentreComponent({
                                 <button 
                                   type="button" 
                                   disabled={busyKey === rowKey || isBlocked} 
-                                  onClick={() => { if (!isBlocked) handleAction(record, isDispatched, replacementPending); }} 
+                                  onClick={() => { if (!isBlocked) handleAction(record, isDispatched, replacementPending, isCancelled); }} 
                                   title={isBlocked ? "This VRM is on the Manage Blocklist — dispatch disabled" : undefined}
                                   className={`flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium transition-colors disabled:opacity-50 whitespace-nowrap ${replacementPending ? "text-amber-400" : "text-white"} ${splitActionClasses.main}`}
                                 >
@@ -2340,7 +2346,7 @@ function DispatchCentreComponent({
                                     <RefreshCw className="w-2.5 h-2.5 animate-spin" />
                                   ) : (
                                     replacementPending ? (
-                                      <span className="inline-block animate-spin text-[10px]">⟳</span>
+                                      <RefreshCw className="w-2.5 h-2.5" aria-hidden="true" />
                                     ) : (
                                       <Mail className="w-2.5 h-2.5" />
                                     )
@@ -2378,7 +2384,6 @@ function DispatchCentreComponent({
                       </div>
                     </td>
 
-                    {/* Repeat User — compact derived-data indicator; no extra database requests */}
                     <td className="py-3 px-1.5 w-[76px] max-w-[76px] text-center border-l border-slate-100 dark:border-[#102947]/60 whitespace-nowrap text-[10px]" onClick={e => e.stopPropagation()}>
                       {(() => {
                         const rKey = String(record.formId ?? record.id ?? `${record.vrm}_${record.dateRequired}_${index}`);

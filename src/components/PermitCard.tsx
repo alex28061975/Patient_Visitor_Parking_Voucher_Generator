@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, useImperativeHandle, forwardRef } from "react";
+import { createPortal } from "react-dom";
 import QRCode from "qrcode";
 import { PermitData } from "../types";
 import { motion } from "motion/react";
@@ -25,7 +26,8 @@ import {
   isVoucherInValidityPeriod,
   cleanVoucherCodeValue
 } from "../utils/csvParser";
-import { getRecordKeys, checkIsRecordDispatched, getRecordPrimaryKey } from "../utils/dispatchUtils";
+import { getRecordKeys, checkIsRecordDispatched, getRecordPrimaryKey, startQrClipboardWrite, type ClipboardWriteSession } from "../utils/dispatchUtils";
+export { startQrClipboardWrite, type ClipboardWriteSession };
 import { 
   getReplacementEmailContent, 
   getResendConcessionEmailContent,
@@ -64,8 +66,8 @@ import {
 } from "lucide-react";
 
 export interface PermitCardHandle {
-  send: (record?: CsvPermitRecord, options?: { skipDispatch?: boolean; isReplacement?: boolean }) => Promise<boolean | void>;
-  sendOne: (record?: CsvPermitRecord, options?: { skipDispatch?: boolean; isReplacement?: boolean }) => Promise<boolean | void>;
+  send: (record?: CsvPermitRecord, options?: { skipDispatch?: boolean; isReplacement?: boolean; clipboardSession?: ClipboardWriteSession }) => Promise<boolean | void>;
+  sendOne: (record?: CsvPermitRecord, options?: { skipDispatch?: boolean; isReplacement?: boolean; clipboardSession?: ClipboardWriteSession }) => Promise<boolean | void>;
   bulkEmail: (records?: CsvPermitRecord[]) => Promise<boolean | void>;
   unsend: (record?: CsvPermitRecord) => Promise<boolean | void>;
   print: () => void;
@@ -639,7 +641,7 @@ function PermitCardInner({
     }
   }, [toastMessage]);
 
-  const handleResendConcessionEmail = async () => {
+  const handleResendConcessionEmail = async (options?: { clipboardSession?: ClipboardWriteSession }) => {
     const resendTargetRecord = (activeIndex !== -1 && matchingPermits[activeIndex])
       ? matchingPermits[activeIndex]
       : (database ? database.find(r => (data.formId && (r.formId === data.formId || r.id === data.formId))) : undefined) || {
@@ -664,31 +666,19 @@ function PermitCardInner({
                              isRecordCancelled(recordToCheck, recTodayDate, database);
 
     if (isCancelled || isCancelledCheck) {
-      return handleSendClick();
+      options?.clipboardSession?.rejectBlob(new Error("Permit is cancelled"));
+      return handleSendClick(undefined, options);
     }
-    // Kick off the clipboard write synchronously, right here at the top, so the call is
-    // still inside the user-activation window from the click. The awaited network calls
-    // below (VRM check, Supabase dispatch write) would otherwise cause the browser to
-    // silently refuse navigator.clipboard.write() by the time we reach it later.
-    // The actual PNG bytes are supplied afterwards via the promise passed to ClipboardItem,
-    // which the Clipboard API is allowed to wait on.
-    let resolveQrBlob: ((blob: Blob) => void) | undefined;
-    let rejectQrBlob: ((err: unknown) => void) | undefined;
-    let clipboardWritePromise: Promise<void> | null = null;
-    if (navigator.clipboard && typeof navigator.clipboard.write === 'function') {
-      const qrBlobPromise = new Promise<Blob>((resolve, reject) => {
-        resolveQrBlob = resolve;
-        rejectQrBlob = reject;
-      });
-      try {
-        clipboardWritePromise = navigator.clipboard.write([
-          new ClipboardItem({ "image/png": qrBlobPromise })
-        ]);
-      } catch (err) {
-        console.warn("Clipboard write initiation error:", err);
-        clipboardWritePromise = null;
-      }
-    }
+    setOutlookQrDataUrl("");
+    setOutlookCopyStatus("idle");
+    let qrImageCopied = false;
+
+    // Reuse an already-initiated synchronous clipboard session when available,
+    // otherwise initiate synchronously on this click tick before any awaits.
+    const clipboardSession = options?.clipboardSession ?? startQrClipboardWrite();
+    const resolveQrBlob = clipboardSession.resolveBlob;
+    const rejectQrBlob = clipboardSession.rejectBlob;
+    const clipboardWritePromise = clipboardSession.writePromise;
 
     const silentBlocked = await isVrmSilentBlocked(data.vrm || "");
     if (silentBlocked) {
@@ -790,8 +780,6 @@ function PermitCardInner({
       status: "SENT"
     });
 
-    setShowOutlookGuide(true);
-
     if (currentSelectedCode && currentSelectedCode !== "-" && currentSelectedCode !== "CANCELLED") {
       setLastDispatchedCodeMap(prev => ({ ...prev, [recordKeyStr]: currentSelectedCode }));
     }
@@ -831,6 +819,9 @@ function PermitCardInner({
     // window), rather than calling navigator.clipboard.write() again down here — by this
     // point the VRM check and Supabase dispatch write have created enough of an async gap
     // that the browser can silently refuse a fresh write() call.
+    if (!isCancelled && activeQrDataUrl) {
+      setOutlookQrDataUrl(activeQrDataUrl);
+    }
     if (!isCancelled && activeQrDataUrl && resolveQrBlob) {
       try {
         resolveQrBlob(dataURLtoBlob(activeQrDataUrl));
@@ -845,11 +836,22 @@ function PermitCardInner({
       try {
         window.focus();
         await clipboardWritePromise;
+        qrImageCopied = true;
+        setOutlookCopyStatus("success");
         setCopyStatus("success");
         setTimeout(() => setCopyStatus("idle"), 2000);
       } catch (err) {
         console.warn("Clipboard copy QR code error:", err);
+        setOutlookCopyStatus("error");
       }
+    } else if (!isCancelled) {
+      setOutlookCopyStatus("error");
+    }
+
+    if (!isCancelled && !qrImageCopied) {
+      setShowOutlookGuide(true);
+    } else {
+      setShowOutlookGuide(false);
     }
 
     // Automatically open Outlook / email composer
@@ -869,7 +871,9 @@ function PermitCardInner({
       console.warn("Could not auto-open Outlook link:", err);
     }
 
-    showToast(`📋 QR Code copied! Outlook opened — paste (Ctrl+V) into the email body.`);
+    showToast(qrImageCopied
+      ? "📋 QR image copied. Outlook opened — paste (Ctrl+V) into the email body."
+      : "Outlook opened, but the QR image was not copied. Return to ParkPass and use Copy QR image.");
 
     let nextUnsentRecord: CsvPermitRecord | null = null;
     if (matchingPermits.length > 0 && activeIndex !== -1) {
@@ -894,7 +898,7 @@ function PermitCardInner({
     return true;
   };
 
-  const handleSendClick = async (targetRecordArg?: CsvPermitRecord | any, options?: { skipDispatch?: boolean; isReplacement?: boolean }) => {
+  const handleSendClick = async (targetRecordArg?: CsvPermitRecord | any, options?: { skipDispatch?: boolean; isReplacement?: boolean; clipboardSession?: ClipboardWriteSession }) => {
     const isRealRecord = (r: any): r is CsvPermitRecord => {
       return Boolean(r && typeof r === 'object' && !('nativeEvent' in r) && !('isTrusted' in r) && !('preventDefault' in r) && (r.vrm || r.formId || r.id || r.driverName || r.email));
     };
@@ -957,10 +961,22 @@ function PermitCardInner({
       (!targetRecord && isCancelled)
     );
     const vrm = rec?.vrm || data.vrm || "";
+
+    // Start clipboard session synchronously on this tick if not already started upstream
+    if (isCancelledRec) {
+      options?.clipboardSession?.rejectBlob(new Error("Permit is cancelled"));
+    }
+    const clipboardSession = !isCancelledRec
+      ? (options?.clipboardSession ?? startQrClipboardWrite())
+      : undefined;
+    const effectiveOptions = clipboardSession
+      ? { ...options, clipboardSession }
+      : options;
+
     const hasExplicitReplacement = Boolean(data.replacementCode || rec?.replacementCode);
     const shouldResendConcession = hasExplicitReplacement;
     if (!isCancelledRec && !targetRecord && shouldResendConcession) {
-      const res = await handleResendConcessionEmail();
+      const res = await handleResendConcessionEmail(effectiveOptions);
       if (res === false) {
         showToast("❌ Failed to send. Please try again.");
       }
@@ -971,6 +987,7 @@ function PermitCardInner({
     // CANCELLED is a dispatchable permit state (used for the cancellation
     // email workflow). Only an actual BLOCKED VRM prevents sending.
     if (silentBlocked && !isCancelledRec) {
+      clipboardSession?.rejectBlob(new Error("VRM silently blocked"));
       if (!targetRecord) {
         setQrUrl("");
         setQrUrlSmall("");
@@ -985,10 +1002,11 @@ function PermitCardInner({
       await generateQrUrls(effectivePayload);
     }
     if (!isCancelledRec && !recCode && !qrUrl && !targetRecord) {
+      clipboardSession?.rejectBlob(new Error("No QR code available"));
       showToast(`⚠️ Cannot send email: No QR code is available for this permit. Please assign a valid voucher code.`);
       return;
     }
-    const result = await handleSendWithOutlook(targetRecord, options);
+    const result = await handleSendWithOutlook(targetRecord, effectiveOptions);
     if (result !== false) {
       const targetPayloadCode = rec?.voucherCode || rec?.prePaidCode || (!targetRecord ? currentSelectedCode : "");
       const targetRecordKeyStr = rec ? (getRecordPrimaryKey(rec) || vrm) : recordKeyStr;
@@ -1045,6 +1063,8 @@ function PermitCardInner({
     return (safeLocalStorage.getItem("outlook_permit_client_type") as "app" | "web" | "live" | null) || "app";
   });
   const [showOutlookGuide, setShowOutlookGuide] = useState<boolean>(false);
+  const [outlookQrDataUrl, setOutlookQrDataUrl] = useState<string>("");
+  const [outlookCopyStatus, setOutlookCopyStatus] = useState<"idle" | "success" | "error">("idle");
   const [copyTarget, setCopyTarget] = useState<"card" | "qr">("qr");
   const [copySubjectSuccess, setCopySubjectSuccess] = useState<boolean>(false);
   const [copyBodySuccess, setCopyBodySuccess] = useState<boolean>(false);
@@ -1768,6 +1788,41 @@ function PermitCardInner({
     }
   };
 
+  const handleCopyOutlookQr = async () => {
+    if (!outlookQrDataUrl) {
+      setOutlookCopyStatus("error");
+      showToast("No QR image is available to copy for this email.");
+      return;
+    }
+    try {
+      if (!navigator.clipboard || typeof navigator.clipboard.write !== "function" || typeof ClipboardItem === "undefined") {
+        throw new Error("This browser does not support copying images to the clipboard.");
+      }
+      // A direct Blob write from this button click gets a fresh user-activation window.
+      const imageBlob = dataURLtoBlob(outlookQrDataUrl);
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": imageBlob })]);
+      setOutlookCopyStatus("success");
+      showToast("QR image copied. Return to Outlook and press Ctrl+V in the message body.");
+    } catch (err) {
+      console.error("Manual Outlook QR image copy failed:", err);
+      setOutlookCopyStatus("error");
+      showToast("The QR image could not be copied. Use Download QR and insert it into Outlook instead.");
+    }
+  };
+
+  const handleDownloadOutlookQr = () => {
+    if (!outlookQrDataUrl) {
+      showToast("No QR image is available to download.");
+      return;
+    }
+    const link = document.createElement("a");
+    link.href = outlookQrDataUrl;
+    link.download = getDownloadFilename("qr");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const handlePrint = async () => {
     if (qrPayload && !qrUrl) {
       await generateQrUrls(qrPayload);
@@ -1914,7 +1969,11 @@ function PermitCardInner({
   // - Red text for non-refundable
   // - Blue clickable email link
   // ============================================
-  const handleSendWithOutlook = async (targetRecordArg?: CsvPermitRecord | any, options?: { skipDispatch?: boolean; isReplacement?: boolean }) => {
+  const handleSendWithOutlook = async (targetRecordArg?: CsvPermitRecord | any, options?: { skipDispatch?: boolean; isReplacement?: boolean; clipboardSession?: ClipboardWriteSession }) => {
+    setOutlookQrDataUrl("");
+    setOutlookCopyStatus("idle");
+    let qrImageCopied = false;
+
     // Sanitize targetRecord: ensure it's not a React SyntheticEvent or other non-record object
     const isRealRecord = (r: any): r is CsvPermitRecord => {
       return Boolean(r && typeof r === 'object' && !('nativeEvent' in r) && !('isTrusted' in r) && !('preventDefault' in r) && (r.vrm || r.formId || r.id || r.driverName || r.email));
@@ -1995,29 +2054,24 @@ function PermitCardInner({
       : (targetRec.replacementCode || targetRec.voucherCode || targetRec.voucherCodesText || targetRec.prePaidCode || "")
     ).trim().toUpperCase();
 
-    // 2. Kick off clipboard write ONLY if permit is NOT cancelled!
-    // If cancelled, skip navigator.clipboard.write() call completely and clear clipboard text
+    // 2. Consume pre-initiated clipboard session (or initiate synchronously if invoked directly) ONLY if permit is NOT cancelled!
+    // If cancelled, reject any upstream session, skip navigator.clipboard.write(), and clear clipboard text.
     let resolveQrBlob: ((blob: Blob) => void) | undefined;
     let rejectQrBlob: ((err: unknown) => void) | undefined;
     let clipboardWritePromise: Promise<void> | null = null;
-    if (!targetIsCancelled && navigator.clipboard && typeof navigator.clipboard.write === 'function') {
-      const qrBlobPromise = new Promise<Blob>((resolve, reject) => {
-        resolveQrBlob = resolve;
-        rejectQrBlob = reject;
-      });
-      try {
-        clipboardWritePromise = navigator.clipboard.write([
-          new ClipboardItem({ "image/png": qrBlobPromise })
-        ]);
-      } catch (err) {
-        console.warn("Clipboard write initiation error:", err);
-        clipboardWritePromise = null;
-      }
-    } else if (targetIsCancelled && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-      try {
-        navigator.clipboard.writeText("").catch(() => {});
-      } catch {
-        // safe ignore
+    if (!targetIsCancelled) {
+      const session = options?.clipboardSession ?? startQrClipboardWrite();
+      resolveQrBlob = session.resolveBlob;
+      rejectQrBlob = session.rejectBlob;
+      clipboardWritePromise = session.writePromise;
+    } else {
+      options?.clipboardSession?.rejectBlob(new Error("Permit is cancelled"));
+      if (typeof navigator !== "undefined" && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        try {
+          navigator.clipboard.writeText("").catch(() => {});
+        } catch {
+          // safe ignore
+        }
       }
     }
 
@@ -2112,9 +2166,7 @@ function PermitCardInner({
       }
     }
 
-    if (!targetIsCancelled) {
-      setShowOutlookGuide(true);
-    } else {
+    if (targetIsCancelled) {
       setShowOutlookGuide(false);
     }
     const targetRecordKeyStr = getRecordPrimaryKey(targetRec) || targetVrm;
@@ -2155,6 +2207,9 @@ function PermitCardInner({
         }
       }
 
+      if (activeQrDataUrl) {
+        setOutlookQrDataUrl(activeQrDataUrl);
+      }
       if (!targetIsCancelled && activeQrDataUrl && resolveQrBlob) {
         try {
           resolveQrBlob(dataURLtoBlob(activeQrDataUrl));
@@ -2169,11 +2224,22 @@ function PermitCardInner({
         try {
           window.focus();
           await clipboardWritePromise;
+          qrImageCopied = true;
+          setOutlookCopyStatus("success");
           setCopyStatus("success");
           setTimeout(() => setCopyStatus("idle"), 2000);
         } catch (err) {
           console.warn("Clipboard copy QR code error:", err);
+          setOutlookCopyStatus("error");
         }
+      } else {
+        setOutlookCopyStatus("error");
+      }
+
+      if (!qrImageCopied) {
+        setShowOutlookGuide(true);
+      } else {
+        setShowOutlookGuide(false);
       }
     }
 
@@ -2197,8 +2263,10 @@ function PermitCardInner({
     const recipientDisplay = targetDriverName || targetVrm || "permit";
     if (targetIsCancelled) {
       showToast(`📧 Outlook opened for ${recipientDisplay} — cancellation notice prepared.`);
+    } else if (qrImageCopied) {
+      showToast(`📋 QR image copied. Outlook opened for ${recipientDisplay} — paste (Ctrl+V) into the email body.`);
     } else {
-      showToast(`📋 QR Code copied! Outlook opened for ${recipientDisplay} — paste (Ctrl+V) into the email body.`);
+      showToast(`Outlook opened for ${recipientDisplay}, but the QR image was not copied. Return to ParkPass and use Copy QR image.`);
     }
 
     // 9. Auto-progression: only when initiated from the card interface
@@ -2228,7 +2296,7 @@ function PermitCardInner({
     return true;
   };
 
-  const sendOne = async (record?: CsvPermitRecord, options?: { skipDispatch?: boolean; isReplacement?: boolean }) => {
+  const sendOne = async (record?: CsvPermitRecord, options?: { skipDispatch?: boolean; isReplacement?: boolean; clipboardSession?: ClipboardWriteSession }) => {
     if (record) {
       onSelectRecord?.(record);
       await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
@@ -2297,7 +2365,7 @@ function PermitCardInner({
   }, [isOffscreen, matchingPermits, activeIndex, qrUrlSmall, isCurrentDispatched, onSelectRecord, handleSendWithOutlook]);
 
   useImperativeHandle(ref, () => ({
-    send: (record?: CsvPermitRecord, options?: { skipDispatch?: boolean }) => handleSendClick(record, options),
+    send: (record?: CsvPermitRecord, options?: { skipDispatch?: boolean; isReplacement?: boolean; clipboardSession?: ClipboardWriteSession }) => handleSendClick(record, options),
     sendOne,
     bulkEmail,
     unsend: async (record?: CsvPermitRecord) => {
@@ -2896,32 +2964,52 @@ function PermitCardInner({
         </div>
       )}
 
-      {!previewOnly && showOutlookGuide && (
-        <div className="fixed bottom-4 right-4 z-50 max-w-[280px] bg-slate-900 dark:bg-slate-950 text-white p-3 rounded-xl shadow-xl border border-slate-700/80 space-y-2.5">
+      {!previewOnly && showOutlookGuide && typeof document !== "undefined" && createPortal(
+        <div className="fixed bottom-4 right-4 z-[10000] max-w-[300px] bg-slate-900 dark:bg-slate-950 text-white p-3 rounded-xl shadow-xl border border-slate-700/80 space-y-2.5">
           <div className="flex items-start gap-2">
-            <div className="bg-emerald-500 text-white p-1 rounded-full shrink-0 mt-0.5">
-              <Check className="w-3.5 h-3.5 stroke-[3]" />
+            <div className={`${outlookCopyStatus === "success" ? "bg-emerald-500" : outlookCopyStatus === "error" ? "bg-amber-500" : "bg-slate-600"} text-white p-1 rounded-full shrink-0 mt-0.5`}>
+              {outlookCopyStatus === "success" ? <Check className="w-3.5 h-3.5 stroke-[3]" /> : <Copy className="w-3.5 h-3.5" />}
             </div>
             <div className="text-left flex-1 min-w-0">
               <h4 className="font-bold text-[11px] uppercase tracking-wider text-slate-200 font-sans">
-                QR Code Copied!
+                {outlookCopyStatus === "success" ? "QR image copied" : outlookCopyStatus === "error" ? "QR image not copied yet" : "Outlook email opened"}
               </h4>
               <p className="text-[10.5px] text-slate-300 mt-1 leading-normal">
-                Simply press <strong className="text-white">Ctrl + V</strong> inside your Outlook email body to insert it directly.
+                {outlookCopyStatus === "success"
+                  ? <>Return to Outlook and press <strong className="text-white">Ctrl + V</strong> inside the message body.</>
+                  : outlookCopyStatus === "error"
+                    ? "The browser did not confirm that the QR image reached the clipboard. Use Copy QR image before pasting."
+                    : "Preparing the QR image. Copy it here if automatic clipboard copying is unavailable."}
               </p>
-              
-              <div className="flex justify-between items-center mt-2.5 pt-2 border-t border-slate-800">
-                <span className="text-[9px] text-emerald-400 font-bold">Ready to paste</span>
-                <button 
-                  onClick={() => setShowOutlookGuide(false)}
-                  className="text-[10px] font-bold text-blue-400 hover:text-blue-300 transition-colors cursor-pointer px-2 py-0.5 rounded bg-slate-800"
+              <div className="flex flex-wrap gap-2 mt-2.5 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={handleCopyOutlookQr}
+                  disabled={!outlookQrDataUrl}
+                  className="text-[10px] font-bold text-white bg-[#005EB8] hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer px-2.5 py-1.5 rounded"
                 >
-                  Got it
+                  Copy QR image
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadOutlookQr}
+                  disabled={!outlookQrDataUrl}
+                  className="text-[10px] font-bold text-slate-200 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer px-2.5 py-1.5 rounded"
+                >
+                  Download QR
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowOutlookGuide(false)}
+                  className="text-[10px] font-bold text-blue-400 hover:text-blue-300 transition-colors cursor-pointer px-2 py-1.5 rounded"
+                >
+                  Dismiss
                 </button>
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {showUnsendConfirm && (

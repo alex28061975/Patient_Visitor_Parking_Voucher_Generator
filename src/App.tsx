@@ -20,7 +20,8 @@ import {
   isRecordMatch,
   isPlaceholderVrm,
   getNormalizedPermitKey,
-  resolveEditRecordStatus
+  resolveEditRecordStatus,
+  type ClipboardWriteSession
 } from "./utils/dispatchUtils";
 
 // CSV Database Imports
@@ -3171,7 +3172,7 @@ export default function App() {
     permitCardRef.current?.print();
   }, [showToast]);
 
-  const handleResendRecord = useCallback(async (record: CsvPermitRecord) => {
+  const handleResendRecord = useCallback(async (record: CsvPermitRecord, clipboardSession?: ClipboardWriteSession) => {
     // A resend is permitted only for a replacement code explicitly assigned
     // through Choose a code or EDIT. Never auto-allocate a code from this action.
     const currentForm = formDataRef.current;
@@ -3182,6 +3183,7 @@ export default function App() {
     ).trim().toUpperCase();
 
     if (!newVoucherCode || newVoucherCode === "-" || newVoucherCode === "CANCELLED" || newVoucherCode === "PENDING") {
+      clipboardSession?.rejectBlob(new Error("No replacement code has been explicitly assigned"));
       showToast("No replacement code has been explicitly assigned. Use Choose a code or EDIT first.", "warning");
       return;
     }
@@ -3311,28 +3313,31 @@ export default function App() {
     // 8. Open email composer with the new code & tracking pixel (skip redundant dispatch)
     handleSelectRecord(updatedRecord);
     if (permitCardRef.current?.sendOne) {
-      await permitCardRef.current.sendOne(updatedRecord, { skipDispatch: true, isReplacement: true });
+      await permitCardRef.current.sendOne(updatedRecord, { skipDispatch: true, isReplacement: true, clipboardSession });
+    } else {
+      clipboardSession?.rejectBlob(new Error("PermitCard sendOne unavailable"));
     }
 
     showToast(`✅ Replacement permit resent with new code ${newVoucherCode}. Status updated to SENT.`, "success");
   }, [markAsDispatched, handleSelectRecord, showToast]);
 
-  const handleDispatchRecord = useCallback(async (record: CsvPermitRecord) => {
+  const handleDispatchRecord = useCallback(async (record: CsvPermitRecord, clipboardSession?: ClipboardWriteSession) => {
     const currentForm = formDataRef.current;
     const isRep = Boolean(
       record.replacementCode ||
       (isRecordMatch(record, currentForm) && currentForm.replacementCode)
     );
     if (isRep) {
-      return handleResendRecord(record);
+      return handleResendRecord(record, clipboardSession);
     }
 
     handleSelectRecord(record);
     if (permitCardRef.current?.sendOne) {
-      await permitCardRef.current.sendOne(record);
+      await permitCardRef.current.sendOne(record, { clipboardSession });
     } else if (permitCardRef.current?.send) {
-      await permitCardRef.current.send(record);
+      await permitCardRef.current.send(record, { clipboardSession });
     } else {
+      clipboardSession?.rejectBlob(new Error("PermitCard unavailable"));
       await markAsDispatched(record.vrm, record.email, record);
     }
   }, [handleResendRecord, handleSelectRecord, markAsDispatched]);

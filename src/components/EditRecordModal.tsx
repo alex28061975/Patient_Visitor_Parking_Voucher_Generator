@@ -256,7 +256,6 @@ function EditRecordModalComponent({
 
     setIsReplacingCode(true);
     setFormReplacementCode(selectedCode);
-    setFormStatus("PENDING");
     setTimeout(() => setIsReplacingCode(false), 600);
   };
 
@@ -411,6 +410,7 @@ function EditRecordModalComponent({
 
     const baseUpdatedRecord: CsvPermitRecord = {
       ...record,
+      originalVoucherCode: record.originalVoucherCode || origCode,
       vrm: trimmedVrm,
       driverName: formDriverName.trim(),
       name: formDriverName.trim(),
