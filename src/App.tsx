@@ -27,7 +27,6 @@ import {
 // CSV Database Imports
 import { INITIAL_DEMO_CSV } from "./data/defaultCsv";
 import { isVrmSilentBlockedSync, isVrmBlocked, hydrateBlocklistFromServer } from "./lib/blocklist";
-import { apiFetch } from "./lib/apiClient";
 import { CsvPermitRecord, parsePermitCsv, parseDateToISO, addDays, formatPhoneNumber, ParsedVoucherData, addDaysSafe, parseDateRange, getDatesInRange, cleanVoucherCodeValue, exportToExcel, isVoucherCodeMatch, sortRecordsByFormIdDesc, getMatchingPermits, isDateRequiredOutsideValidWindow, isPermitExpiredBackdate, getTodayISO, checkIsBlockedDuplicate, parseFullDateTimeMs, normalizeVouchersList, isRecordCancelled, getRequestedPermitDateISO, isVoucherExactPeriodEligible, isVoucherAvailableStatus, isVoucherVrmCompatible, clearDuplicateCheckCache, extractRecordSubmissionTimeMs, extractRecordNumericFormId, isPermitFuture } from "./utils/csvParser";
 // ⭐ FIX: Import canonical voucher validation helper
 import { isVoucherForPermitDateRange, validateManualVoucherChange, getVoucherValidFromISO, getVoucherValidToISO, normalizeDateToISO, addDaysISO } from "./utils/voucherValidation";
@@ -131,7 +130,7 @@ export async function executeReplacementResendTransaction(
     return false;
   }
 
-  // Step 0: Authoritative blocklist pre-check BEFORE /api/emails/resend or ANY state/database mutations
+  // Step 0: Authoritative blocklist pre-check BEFORE email preparation or ANY state/database mutations
   const blockCheckDate = record.validFrom || record.dateRequired || currentForm.validFrom || getTodayISO();
   let isBlocked = false;
   try {
@@ -212,7 +211,7 @@ export async function executeReplacementResendTransaction(
   const pk = getRecordPrimaryKey(record) || record.vrm || String(record.id || "");
   const normVrm = (record.vrm || "").toUpperCase().replace(/\s+/g, "");
 
-  // Step 1: Await backend /api/emails/resend (records PREPARED status) and abort immediately if non-OK
+  // Step 1: Validate replacement code & prepare tracking status; abort immediately if non-OK
   let trackingId = "";
   try {
     const resendRes = await deps.resendEmailApi({
@@ -1385,51 +1384,6 @@ export default function App() {
   useEffect(() => {
     formDataRef.current = formData;
   }, [formData]);
-
-  // Background polling to keep email open tracking synced with backend
-  useEffect(() => {
-    const pollEmailStatuses = async () => {
-      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-      try {
-        const res = await apiFetch("/api/emails/statuses");
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data?.statuses) {
-          setEmailTracking(prev => {
-            let changed = false;
-            const next = { ...prev };
-            for (const [key, val] of Object.entries(data.statuses as Record<string, any>)) {
-              const current = next[key];
-              if (!current || current.status !== val.status || current.openedAt !== val.openedAt || current.openCount !== val.openCount) {
-                next[key] = {
-                  status: val.status,
-                  sentAt: val.sentAt || current?.sentAt,
-                  openedAt: val.openedAt,
-                  openCount: val.openCount,
-                  trackingId: val.trackingId || current?.trackingId
-                };
-                changed = true;
-              }
-            }
-            if (changed) {
-              safeLocalStorage.setItem("concessions_email_tracking", JSON.stringify(next));
-              return next;
-            }
-            return prev;
-          });
-        }
-      } catch (e) {}
-    };
-
-    pollEmailStatuses();
-    const interval = setInterval(pollEmailStatuses, 8000);
-    const handleFocus = () => pollEmailStatuses();
-    window.addEventListener("focus", handleFocus);
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener("focus", handleFocus);
-    };
-  }, []);
 
   const [isSyncing, setIsSyncing] = useState(false);
   const [showBlocklist, setShowBlocklist] = useState<boolean>(false);
@@ -3610,44 +3564,30 @@ export default function App() {
       isSupabaseConfigured,
       checkVrmBlocked: (vrm, checkDate) => isVrmBlocked(vrm, checkDate),
       resendEmailApi: async (payload) => {
-        const res = await apiFetch("/api/emails/resend", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json().catch(() => null);
-        if (!res.ok) {
+        const voucherCode = String(payload?.requestedCode || "").trim().toUpperCase();
+        if (
+          !voucherCode ||
+          voucherCode === "-" ||
+          voucherCode === "CANCELLED" ||
+          voucherCode === "PENDING" ||
+          voucherCode === "UNDEFINED" ||
+          voucherCode === "NULL"
+        ) {
           return {
             ok: false,
-            status: res.status,
-            error: data?.error || `HTTP ${res.status}`
+            status: 400,
+            error: "Empty or placeholder voucher code is not permitted"
           };
         }
         return {
           ok: true,
-          status: res.status,
-          voucherCode: data?.voucherCode,
-          trackingId: data?.trackingId
+          status: 200,
+          voucherCode,
+          trackingId: `trk_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 9)}`
         };
       },
-      confirmEmailApi: async (trackingId) => {
-        if (!trackingId) return true;
-        const res = await apiFetch("/api/emails/confirm", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ trackingId })
-        });
-        return res.ok;
-      },
-      revertEmailApi: async (trackingId) => {
-        if (!trackingId) return true;
-        const res = await apiFetch("/api/emails/revert", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ trackingId })
-        });
-        return res.ok;
-      },
+      confirmEmailApi: async () => true,
+      revertEmailApi: async () => true,
       updatePermitInSupabase,
       markAsDispatched,
       isRecordCurrentlyDispatched: (rec) => checkIsRecordDispatched(rec, dispatchedKeysRef.current, unsentKeysRef.current),

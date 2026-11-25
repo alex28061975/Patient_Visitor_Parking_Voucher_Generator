@@ -41,7 +41,6 @@ import {
 } from "../utils/emailTemplateUtils";
 import { safeLocalStorage } from "../utils/safeLocalStorage";
 import { isVrmSilentBlocked } from "../lib/blocklist";
-import { apiFetch } from "../lib/apiClient";
 import { 
   Download, 
   Copy, 
@@ -701,32 +700,6 @@ function PermitCardInner({
       return;
     }
 
-    let trackingPixelUrl: string | undefined = undefined;
-    let preparedTrackingId: string | undefined = undefined;
-    try {
-      const res = await apiFetch("/api/emails/resend", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          recordKey: data.formId ? String(data.formId) : (data.vrm || ""),
-          vrm: data.vrm,
-          driverName: data.name,
-          email: recipientEmail,
-          requestedCode: currentSelectedCode || effectiveResendPayload,
-          validFrom: data.validFrom,
-          validTo: data.validTo,
-          todayDate: data.todayDate
-        })
-      });
-      if (res.ok) {
-        const resData = await res.json();
-        trackingPixelUrl = resData.trackingPixelUrl;
-        preparedTrackingId = resData.trackingId;
-      }
-    } catch (e) {
-      console.warn("Could not register tracking pixel with backend:", e);
-    }
-
     const recValidFrom = data.validFrom || data.dateRequired || resendTargetRecord.validFrom || resendTargetRecord.dateRequired || "";
     const recValidTo = data.validTo || resendTargetRecord.validTo || (recValidFrom ? addDays(recValidFrom, 6) : "") || "";
     const params = {
@@ -736,8 +709,7 @@ function PermitCardInner({
       validFrom: recValidFrom,
       validTo: recValidTo,
       todayDate: data.todayDate || resendTargetRecord.todayDate || getTodayISO(),
-      dateRequired: data.dateRequired || resendTargetRecord.dateRequired || recValidFrom,
-      trackingPixelUrl
+      dateRequired: data.dateRequired || resendTargetRecord.dateRequired || recValidFrom
     };
     const content = getReplacementEmailContent(params);
     const subject = content.subject;
@@ -758,23 +730,11 @@ function PermitCardInner({
           ward: data.ward
         };
 
-    const revertPreparedTracking = async () => {
-      if (!preparedTrackingId) return;
-      try {
-        await apiFetch("/api/emails/revert", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ trackingId: preparedTrackingId })
-        });
-      } catch {}
-    };
-
     let dispatchResult;
     try {
       dispatchResult = await markAsDispatched?.(data.vrm, data.email, currentTargetRecord);
     } catch (err) {
       console.error("Dispatch mutation error:", err);
-      await revertPreparedTracking();
       rejectQrBlob?.(err);
       showToast("❌ Dispatch failed: Error updating status.");
       return;
@@ -782,20 +742,9 @@ function PermitCardInner({
 
     if (dispatchResult === false) {
       console.warn("Dispatch mutation failed or was rolled back due to database write error.");
-      await revertPreparedTracking();
       rejectQrBlob?.(new Error("Dispatch mutation failed"));
       showToast("❌ Database write error: Failed to update status.");
       return false;
-    }
-
-    if (preparedTrackingId) {
-      try {
-        await apiFetch("/api/emails/confirm", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ trackingId: preparedTrackingId })
-        });
-      } catch {}
     }
 
     onChange?.({

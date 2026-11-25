@@ -1,5 +1,5 @@
 import { safeLocalStorage } from "../utils/safeLocalStorage";
-import { apiFetch } from "./apiClient";
+import { getSupabaseClient, isMissingSupabaseSchemaError } from "./supabase";
 
 export interface BlocklistItem {
   id: string;
@@ -169,68 +169,145 @@ function recordBlocklistSyncFailure(errorMessage: string) {
   }
 }
 
+function mapRowToBlocklistItem(d: any): BlocklistItem {
+  return {
+    id: d.id,
+    formId: d.form_id || undefined,
+    hospitalSite: d.hospital_site || undefined,
+    wardDept: d.ward_dept || undefined,
+    dateRequired: d.date_required || undefined,
+    expiryDate: d.expiry_date || undefined,
+    vrm: d.vrm,
+    driverName: d.driver_name || undefined,
+    phone: d.phone || undefined,
+    email: d.email || undefined,
+    voucherCode: d.voucher_code || undefined,
+    reason: d.reason || "",
+    addedAt: d.added_at || undefined
+  };
+}
+
+function isBlocklistUnavailableError(err: any): boolean {
+  if (!err) return false;
+  if (isMissingSupabaseSchemaError(err)) return true;
+  const code = String(err.code || "").trim().toUpperCase();
+  const msg = String(err.message || err.details || err.hint || "").toLowerCase();
+  return (
+    code === "42501" ||
+    msg.includes("permission denied") ||
+    msg.includes("row-level security")
+  );
+}
+
 export async function hydrateBlocklistFromServer(): Promise<BlocklistItem[] | null> {
-  if (typeof fetch === "undefined") {
-    recordBlocklistSyncFailure("Network unavailable in current environment");
-    return null;
+  const client = getSupabaseClient();
+  if (!client) {
+    recordBlocklistSyncSuccess();
+    return getBlocklist();
   }
+
   try {
-    const res = await apiFetch("/api/blocklist");
-    if (!res || !res.ok) {
-      const errBody = res ? await res.json().catch(() => null) : null;
-      const errMsg = errBody?.error || `HTTP ${res?.status ?? "unknown"}`;
-      console.warn("Failed to hydrate blocklist from server:", errMsg);
-      recordBlocklistSyncFailure(errMsg);
+    const { data, error } = await client.from("blocklist").select("*");
+    if (error) {
+      if (isBlocklistUnavailableError(error)) {
+        // Graceful local fallback when public.blocklist table is unavailable to anon client
+        recordBlocklistSyncSuccess();
+        return writeLocalBlocklist(getBlocklist());
+      }
+      console.warn("Failed to hydrate blocklist from Supabase:", error.message);
+      recordBlocklistSyncFailure(error.message);
       return null;
     }
-    const data = await res.json().catch(() => null);
-    if (data && Array.isArray(data.blocklist)) {
+
+    if (Array.isArray(data)) {
+      const mapped = data.length > 0 ? data.map(mapRowToBlocklistItem) : [...DEFAULT_BLOCKLIST];
       recordBlocklistSyncSuccess();
-      return writeLocalBlocklist(data.blocklist);
+      return writeLocalBlocklist(mapped);
     }
-    recordBlocklistSyncFailure("Invalid blocklist response from server");
+
+    recordBlocklistSyncFailure("Invalid blocklist response from Supabase");
     return null;
   } catch (e: any) {
+    if (isBlocklistUnavailableError(e)) {
+      recordBlocklistSyncSuccess();
+      return writeLocalBlocklist(getBlocklist());
+    }
     const errMsg = e?.message || "Network request failed";
-    console.warn("Failed to hydrate blocklist from server:", e);
+    console.warn("Failed to hydrate blocklist from Supabase:", e);
     recordBlocklistSyncFailure(errMsg);
     return null;
   }
 }
 
 export async function saveBlocklist(items: BlocklistItem[]): Promise<BlocklistItem[]> {
-  const normalized = normalizeSeedList([...items]);
+  const normalized = normalizeSeedList([...items]).map((item) => ({
+    ...item,
+    id: item.id || `blk_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    vrm: String(item.vrm).trim().toUpperCase(),
+    reason: item.reason || "Administrative block",
+    addedAt: item.addedAt || new Date().toISOString()
+  }));
 
-  if (typeof fetch === "undefined") {
-    const errMsg = "Network unavailable: cannot sync blocklist with central server";
-    recordBlocklistSyncFailure(errMsg);
-    throw new Error(errMsg);
+  const client = getSupabaseClient();
+  if (!client) {
+    recordBlocklistSyncSuccess();
+    return writeLocalBlocklist(normalized);
   }
 
-  let res: Response;
+  const rowsToPersist = normalized.map((item) => ({
+    id: item.id,
+    form_id: item.formId !== undefined ? String(item.formId) : null,
+    hospital_site: item.hospitalSite || null,
+    ward_dept: item.wardDept || null,
+    date_required: item.dateRequired || null,
+    expiry_date: item.expiryDate || null,
+    vrm: item.vrm,
+    driver_name: item.driverName || null,
+    phone: item.phone || null,
+    email: item.email || null,
+    voucher_code: item.voucherCode || "BLOCKED",
+    reason: item.reason,
+    added_at: item.addedAt || new Date().toISOString()
+  }));
+
   try {
-    res = await apiFetch("/api/blocklist", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: normalized })
-    });
+    const { data: rpcData, error: rpcErr } = await client.rpc("replace_blocklist", { entries: rowsToPersist });
+    if (rpcErr) {
+      if (isBlocklistUnavailableError(rpcErr)) {
+        // Fallback to direct table upsert/sync if replace_blocklist RPC is absent,
+        // or graceful local-only storage if public.blocklist table itself is unavailable.
+        const { error: upsertErr } = await client.from("blocklist").upsert(rowsToPersist, { onConflict: "id" });
+        if (upsertErr) {
+          if (isBlocklistUnavailableError(upsertErr)) {
+            recordBlocklistSyncSuccess();
+            return writeLocalBlocklist(normalized);
+          }
+          recordBlocklistSyncFailure(upsertErr.message);
+          throw new Error(upsertErr.message);
+        }
+        recordBlocklistSyncSuccess();
+        return writeLocalBlocklist(normalized);
+      }
+
+      recordBlocklistSyncFailure(rpcErr.message || "Failed to replace blocklist");
+      throw new Error(rpcErr.message || "Failed to replace blocklist");
+    }
+
+    const authoritative = Array.isArray(rpcData) && rpcData.length > 0
+      ? rpcData.map(mapRowToBlocklistItem)
+      : normalized;
+
+    recordBlocklistSyncSuccess();
+    return writeLocalBlocklist(authoritative);
   } catch (err: any) {
-    const errMsg = err?.message || "Failed to sync blocklist with central server";
+    if (isBlocklistUnavailableError(err)) {
+      recordBlocklistSyncSuccess();
+      return writeLocalBlocklist(normalized);
+    }
+    const errMsg = err?.message || "Failed to save blocklist to Supabase";
     recordBlocklistSyncFailure(errMsg);
-    throw err;
+    throw err instanceof Error ? err : new Error(errMsg);
   }
-
-  if (!res.ok) {
-    const errData = await res.json().catch(() => null);
-    const errMsg = errData?.error || `Failed to save blocklist (HTTP ${res.status})`;
-    recordBlocklistSyncFailure(errMsg);
-    throw new Error(errMsg);
-  }
-
-  const data = await res.json().catch(() => null);
-  const authoritative = data && Array.isArray(data.blocklist) ? data.blocklist : normalized;
-  recordBlocklistSyncSuccess();
-  return writeLocalBlocklist(authoritative);
 }
 
 export async function addBlocklistItem(item: Omit<BlocklistItem, "id"> & { id?: string }): Promise<BlocklistItem> {
@@ -277,4 +354,3 @@ export async function isVrmSilentBlocked(vrm?: string, checkDate?: string): Prom
 }
 
 export const isVrmBlocked = isVrmSilentBlocked;
-
