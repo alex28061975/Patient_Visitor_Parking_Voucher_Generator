@@ -76,7 +76,6 @@ import {
   formatDateUK,
   getVoucherInventorySummary,
   getStockLevel,
-  getCoverLevel,
   excludeRecordOwnCodes
 } from "../utils/voucherValidation";
 
@@ -694,12 +693,9 @@ function DispatchCentreComponent({
     };
 
     setSelectedRowRecord(updatedRecord);
-    onChangeFormData?.(buildReplacementFormUpdate(currentRec, selectedCode) as any);
 
     try {
-      if (onSaveRecord) {
-        await onSaveRecord(updatedRecord);
-      }
+      await onSaveRecord?.(updatedRecord);
     } catch (err) {
       console.error("Failed to save replacement record:", err);
       setAssignmentError("Failed to save replacement code");
@@ -750,14 +746,10 @@ function DispatchCentreComponent({
 
     const draftKey = getReplacementDraftKey(record);
     const localDraft = draftKey ? replacementDraftsByRecord[draftKey] : undefined;
-    const matchesSelectedRow = Boolean(selectedRowRecord && isRecordMatch(record, selectedRowRecord));
-    const matchesForm = Boolean(formData && isRecordMatch(record, formData));
 
     const candidates = [
-      matchesSelectedRow ? selectedRowRecord?.replacementCode : undefined,
       localDraft?.code,
       record.replacementCode,
-      matchesForm ? formData?.replacementCode : undefined,
     ];
     const activeCode = cleanVoucherCodeValue(
       String(record.voucherCode || record.prePaidCode || record.voucherCodesText || "")
@@ -767,9 +759,7 @@ function DispatchCentreComponent({
     const isResendActive = Boolean(
       record.isResend || 
       record.emailTemplate === "replacement" || 
-      localDraft || 
-      (matchesSelectedRow && selectedRowRecord?.isResend) ||
-      (matchesForm && (formData?.isResend || formData?.emailTemplate === "replacement"))
+      localDraft
     );
 
     for (const rawCandidate of candidates) {
@@ -785,7 +775,7 @@ function DispatchCentreComponent({
     }
 
     return "";
-  }, [formData, selectedRowRecord, getReplacementDraftKey, replacementDraftsByRecord]);
+  }, [getReplacementDraftKey, replacementDraftsByRecord]);
 
   const isReplacementPending = useCallback((record: CsvPermitRecord) => {
     if (!record) return false;
@@ -1484,13 +1474,19 @@ function DispatchCentreComponent({
           emailTemplate: "replacement"
         } as CsvPermitRecord;
 
+        let success = true;
         if (onResendRecord) {
-          await onResendRecord(resendRecord, clipboardSession);
+          const res: any = await onResendRecord(resendRecord, clipboardSession);
+          if (res === false) success = false;
         } else if (onSendRecord) {
-          await onSendRecord(resendRecord, clipboardSession);
+          const res: any = await onSendRecord(resendRecord, clipboardSession);
+          if (res === false) success = false;
         } else {
           clipboardSession?.rejectBlob(new Error("No resend handler available"));
+          success = false;
         }
+        if (!success) return;
+
         if (draftKey) {
           setReplacementDraftsByRecord(prev => {
             if (!prev[draftKey]) return prev;
@@ -1663,15 +1659,35 @@ function DispatchCentreComponent({
               </button>
             )}
 
-            {voucherBatchBadge && (
-              <span
-                title={`Vouchers are loaded for permits starting up to ${voucherBatchBadge.formattedDate || ''} (${voucherBatchBadge.daysDiff ?? 0} days of cover)`}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 shadow-sm ${voucherBatchBadge.className}`}
-              >
-                <span className="text-[11px] leading-none select-none">{voucherBatchBadge.icon}</span>
-                <span>{voucherBatchBadge.text}</span>
-              </span>
-            )}
+            {(() => {
+              const coverText =
+                voucherBatchBadge.coverToText ||
+                (voucherBatchBadge.text.startsWith("Cover to ") ? voucherBatchBadge.text : "Cover to --/-- · 0d");
+              const isNoActiveCodes = voucherBatchBadge.text !== coverText;
+              const coverDays = voucherBatchBadge.coverDaysRemaining ?? voucherBatchBadge.daysDiff ?? 0;
+              const coverBadgeClass = isNoActiveCodes
+                ? "text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-800/60"
+                : voucherBatchBadge.className;
+              const coverIcon = isNoActiveCodes ? "▲" : voucherBatchBadge.icon;
+              const coverTitle = isNoActiveCodes
+                ? (
+                    voucherBatchBadge.coverToFormatted
+                      ? `No active codes available — furthest voucher coverage to ${voucherBatchBadge.coverToFormatted} (${coverDays} days remaining)`
+                      : `No active codes available — add new batch`
+                  )
+                : `Vouchers cover permits up to ${voucherBatchBadge.coverToFormatted || voucherBatchBadge.formattedDate || ""} (${coverDays} days remaining)`;
+
+              return (
+                <span
+                  data-testid="voucher-cover-badge"
+                  title={coverTitle}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 shadow-sm ${coverBadgeClass}`}
+                >
+                  <span className="text-[11px] leading-none select-none">{coverIcon}</span>
+                  <span>{coverText}</span>
+                </span>
+              );
+            })()}
           </div>
         </div>
 

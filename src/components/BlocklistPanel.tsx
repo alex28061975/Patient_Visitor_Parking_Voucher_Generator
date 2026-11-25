@@ -17,10 +17,12 @@ import {
 } from "lucide-react";
 import { 
   BlocklistItem, 
+  BlocklistSyncStatus,
   getBlocklist, 
-  saveBlocklist, 
+  getBlocklistSyncStatus,
   addBlocklistItem, 
   removeBlocklistItem, 
+  hydrateBlocklistFromServer,
   normalizeVrm 
 } from "../lib/blocklist";
 import { CsvPermitRecord, formatFormId, toTitleCase } from "../utils/csvParser";
@@ -36,6 +38,8 @@ function BlocklistPanelComponent({ isOpen, onClose, database = [] }: BlocklistPa
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [showAddForm, setShowAddForm] = useState<boolean>(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [syncStatus, setSyncStatus] = useState<BlocklistSyncStatus>(() => getBlocklistSyncStatus());
 
   // Form state for adding new blocked vehicle
   const [formVrm, setFormVrm] = useState<string>("");
@@ -53,20 +57,39 @@ function BlocklistPanelComponent({ isOpen, onClose, database = [] }: BlocklistPa
   useEffect(() => {
     const handleUpdate = () => {
       setItems(getBlocklist());
+      setSyncStatus(getBlocklistSyncStatus());
+    };
+    const handleSyncStatus = () => {
+      setSyncStatus(getBlocklistSyncStatus());
     };
     window.addEventListener("blocklist_updated", handleUpdate);
-    return () => window.removeEventListener("blocklist_updated", handleUpdate);
+    window.addEventListener("blocklist_sync_updated", handleSyncStatus);
+    window.addEventListener("blocklist_sync_error", handleSyncStatus);
+    return () => {
+      window.removeEventListener("blocklist_updated", handleUpdate);
+      window.removeEventListener("blocklist_sync_updated", handleSyncStatus);
+      window.removeEventListener("blocklist_sync_error", handleSyncStatus);
+    };
   }, []);
 
   useEffect(() => {
     if (isOpen) {
       setItems(getBlocklist());
+      setSyncStatus(getBlocklistSyncStatus());
+      hydrateBlocklistFromServer()
+        .then((list) => {
+          if (list) setItems(list);
+          setSyncStatus(getBlocklistSyncStatus());
+        })
+        .catch(() => {
+          setSyncStatus(getBlocklistSyncStatus());
+        });
     }
   }, [isOpen]);
 
   const showNotification = (msg: string) => {
     setToastMsg(msg);
-    setTimeout(() => setToastMsg(null), 3000);
+    setTimeout(() => setToastMsg(null), 4000);
   };
 
   // Filtered blocklist items
@@ -109,8 +132,9 @@ function BlocklistPanelComponent({ isOpen, onClose, database = [] }: BlocklistPa
     }
   };
 
-  const handleAddSubmit = (e: React.FormEvent) => {
+  const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
     if (!formVrm.trim()) {
       showNotification("⚠️ Please enter a valid VRM (vehicle registration).");
       return;
@@ -128,42 +152,61 @@ function BlocklistPanelComponent({ isOpen, onClose, database = [] }: BlocklistPa
       return;
     }
 
-    addBlocklistItem({
-      vrm: cleanVrm,
-      reason: formReason.trim(),
-      driverName: formDriverName.trim() || undefined,
-      hospitalSite: formHospital.trim() || undefined,
-      wardDept: formWard.trim() || undefined,
-      dateRequired: formDateRequired.trim() || undefined,
-      expiryDate: formExpiryDate.trim() || undefined,
-      phone: formPhone.trim() || undefined,
-      email: formEmail.trim() || undefined,
-      voucherCode: formVoucherCode.trim() || "BLOCKED",
-      formId: formFormId.trim() || undefined
-    });
+    setIsSaving(true);
+    try {
+      await addBlocklistItem({
+        vrm: cleanVrm,
+        reason: formReason.trim(),
+        driverName: formDriverName.trim() || undefined,
+        hospitalSite: formHospital.trim() || undefined,
+        wardDept: formWard.trim() || undefined,
+        dateRequired: formDateRequired.trim() || undefined,
+        expiryDate: formExpiryDate.trim() || undefined,
+        phone: formPhone.trim() || undefined,
+        email: formEmail.trim() || undefined,
+        voucherCode: formVoucherCode.trim() || "BLOCKED",
+        formId: formFormId.trim() || undefined
+      });
 
-    setItems(getBlocklist());
-    showNotification(`✅ Added ${cleanVrm} to silent blocklist.`);
+      setItems(getBlocklist());
+      showNotification(`✅ Added ${cleanVrm} to silent blocklist.`);
 
-    // Reset form
-    setFormVrm("");
-    setFormReason("");
-    setFormDriverName("");
-    setFormHospital("");
-    setFormWard("");
-    setFormDateRequired("");
-    setFormExpiryDate("");
-    setFormPhone("");
-    setFormEmail("");
-    setFormFormId("");
-    setShowAddForm(false);
+      // Reset form
+      setFormVrm("");
+      setFormReason("");
+      setFormDriverName("");
+      setFormHospital("");
+      setFormWard("");
+      setFormDateRequired("");
+      setFormExpiryDate("");
+      setFormPhone("");
+      setFormEmail("");
+      setFormFormId("");
+      setShowAddForm(false);
+    } catch (err: any) {
+      showNotification(`❌ Failed to save blocklist: ${err?.message || "Server sync error"}`);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleRemove = (id: string, vrm: string) => {
+  const handleRemove = async (id: string, vrm: string) => {
+    if (isSaving) return;
+    if (normalizeVrm(vrm) === "AU67HCZ" && id === "blk_seed_1") {
+      showNotification("⚠️ Core security seed vehicle AU67 HCZ cannot be removed.");
+      return;
+    }
     if (window.confirm(`Are you sure you want to remove VRM ${vrm} from the blocklist?`)) {
-      removeBlocklistItem(id);
-      setItems(getBlocklist());
-      showNotification(`🗑️ Removed ${vrm} from blocklist.`);
+      setIsSaving(true);
+      try {
+        await removeBlocklistItem(id);
+        setItems(getBlocklist());
+        showNotification(`🗑️ Removed ${vrm} from blocklist.`);
+      } catch (err: any) {
+        showNotification(`❌ Failed to remove ${vrm}: ${err?.message || "Server sync error"}`);
+      } finally {
+        setIsSaving(false);
+      }
     }
   };
 
@@ -214,6 +257,32 @@ function BlocklistPanelComponent({ isOpen, onClose, database = [] }: BlocklistPa
             </button>
           </div>
         </div>
+
+        {/* Server Sync Warning Banner */}
+        {syncStatus.isStale && syncStatus.error && (
+          <div className="bg-amber-50 dark:bg-amber-950/60 border-b border-amber-200 dark:border-amber-800/80 px-4 py-2.5 text-xs font-medium text-amber-800 dark:text-amber-200 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+              <span>
+                Unable to sync blocklist with central server ({syncStatus.error}). Showing cached local rules, which may be outdated.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                hydrateBlocklistFromServer()
+                  .then((list) => {
+                    if (list) setItems(list);
+                    setSyncStatus(getBlocklistSyncStatus());
+                  })
+                  .catch(() => setSyncStatus(getBlocklistSyncStatus()));
+              }}
+              className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold rounded transition-colors shrink-0 cursor-pointer"
+            >
+              Retry Sync
+            </button>
+          </div>
+        )}
 
         {/* Toast feedback */}
         {toastMsg && (

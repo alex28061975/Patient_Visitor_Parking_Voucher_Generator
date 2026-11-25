@@ -1,5 +1,11 @@
 import { CsvPermitRecord, getTodayISO, parseDateToISO, cleanVoucherCodeValue } from "./csvParser";
-import { getSupabaseClient, syncDispatchedToSupabase, deleteDispatchedFromSupabase, deleteDispatchedKeysFromSupabase, fetchDispatchedFromSupabase } from "../lib/supabase";
+import {
+  syncDispatchedToSupabase,
+  deleteDispatchedKeysFromSupabase,
+  fetchDispatchedFromSupabase,
+  checkDispatchedKeysViaServer,
+  testDispatchedWriteViaServer
+} from "../lib/supabase";
 import { safeLocalStorage } from "./safeLocalStorage";
 
 /**
@@ -35,15 +41,14 @@ export function getRecordPrimaryKey(
     return String(record.id).trim();
   }
 
-  // Generate a deterministic fallback key based on stable properties without mutating the input object
+  // Canonical primary key without mutable driver-field hashes
   const vrm = (record.vrm || fallbackVrm || "").toString().trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
-  const email = (record.email || record.driverEmail || "").toString().trim().toLowerCase();
   const dateRequired = (record.dateRequired || record.validFrom || record.todayDate || fallbackDate || "").toString().trim();
-  const driverName = (record.driverName || record.name || "").toString().trim().toLowerCase();
-
-  const stableSeed = `${vrm}_${email}_${dateRequired}_${driverName}`;
-  if (stableSeed.replace(/_/g, "").length > 0) {
-    return `rec_${hashString(stableSeed)}`;
+  if (vrm && dateRequired) {
+    return `${vrm}_${dateRequired}`;
+  }
+  if (vrm) {
+    return vrm;
   }
 
   return "";
@@ -96,6 +101,16 @@ export function getRecordKeys(
       add(cleanNum);
       add(`FORM_${cleanNum}`);
     }
+  }
+
+  // Backwards-compatible fallback hash for existing Supabase dispatch records
+  const vrm = (record.vrm || _vrm || "").toString().trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const email = (record.email || record.driverEmail || "").toString().trim().toLowerCase();
+  const dateRequired = (record.dateRequired || record.validFrom || record.todayDate || _dateRequired || "").toString().trim();
+  const driverName = (record.driverName || record.name || _name || "").toString().trim().toLowerCase();
+  const stableSeed = `${vrm}_${email}_${dateRequired}_${driverName}`;
+  if (stableSeed.replace(/_/g, "").length > 0) {
+    add(`rec_${hashString(stableSeed)}`);
   }
 
   return Array.from(keys);
@@ -173,25 +188,9 @@ export async function checkIsRecordDispatchedAsync(
   const primaryKey = getRecordPrimaryKey(record);
   if (!primaryKey) return false;
 
-  const client = getSupabaseClient();
-  if (!client) {
-    console.warn('Supabase client not available');
-    return false;
-  }
-
   try {
     const recordKeys = getRecordKeys(record);
-    const { data, error } = await client
-      .from('dispatched_history')
-      .select('key')
-      .in('key', recordKeys)
-      .limit(1);
-
-    if (error) {
-      console.error('Error checking dispatch status in Supabase:', error);
-      return false;
-    }
-
+    const data = await checkDispatchedKeysViaServer(recordKeys, false);
     return Array.isArray(data) && data.length > 0;
   } catch (error) {
     console.error('Error checking dispatch status:', error);
@@ -231,22 +230,8 @@ export async function batchCheckIsRecordDispatched(
 
   if (allKeysToQuery.length === 0) return result;
 
-  const client = getSupabaseClient();
-  if (!client) {
-    return result;
-  }
-
   try {
-    const { data, error } = await client
-      .from('dispatched_history')
-      .select('key')
-      .in('key', allKeysToQuery);
-
-    if (error) {
-      console.error('Error batch checking dispatch status:', error);
-      return result;
-    }
-
+    const data = await checkDispatchedKeysViaServer(allKeysToQuery, false);
     if (data && Array.isArray(data)) {
       for (const item of data) {
         const pk = keyToRecordPk.get(item.key) || item.key;
@@ -272,11 +257,6 @@ export async function markRecordAsDispatched(
   const primaryKey = getRecordPrimaryKey(record);
   if (!primaryKey) {
     return { success: false, error: 'Could not generate dispatch key from record Form ID' };
-  }
-
-  const client = getSupabaseClient();
-  if (!client) {
-    return { success: false, error: 'Supabase client not available' };
   }
 
   const todayISO = getTodayISO();
@@ -318,15 +298,13 @@ export async function unmarkRecordAsDispatched(
     return { success: false, error: 'Could not generate dispatch key from record Form ID' };
   }
 
-  const client = getSupabaseClient();
-  if (!client) {
-    return { success: false, error: 'Supabase client not available' };
-  }
-
   try {
     const allKeys = getRecordKeys(record);
     const keysToDelete = Array.from(new Set([primaryKey, ...allKeys]));
-    await deleteDispatchedKeysFromSupabase(keysToDelete);
+    const deletedOk = await deleteDispatchedKeysFromSupabase(keysToDelete);
+    if (!deletedOk) {
+      return { success: false, error: 'Failed to remove dispatch status in database' };
+    }
 
     return { success: true };
   } catch (error: any) {
@@ -350,16 +328,9 @@ export async function fetchDispatchedFormIdsFromSupabase(): Promise<{
  * Get all dispatched keys from Supabase (for initial load)
  */
 export async function getAllDispatchedKeys(): Promise<string[]> {
-  const client = getSupabaseClient();
-  if (!client) return [];
-
   try {
-    const { data, error } = await client
-      .from('dispatched_history')
-      .select('key');
-
-    if (error) throw error;
-    return data?.map(item => item.key) || [];
+    const res = await fetchDispatchedFromSupabase();
+    return res?.dispatchedKeys || [];
   } catch (error) {
     console.error('Error getting all dispatched keys:', error);
     return [];
@@ -375,18 +346,9 @@ export async function getRecordDispatchHistory(
   const primaryKey = getRecordPrimaryKey(record);
   if (!primaryKey) return [];
 
-  const client = getSupabaseClient();
-  if (!client) return [];
-
   try {
     const allKeys = getRecordKeys(record);
-    const { data, error } = await client
-      .from('dispatched_history')
-      .select('key, dispatch_date, dispatch_by, vrm, email')
-      .in('key', allKeys);
-
-    if (error) throw error;
-    return data || [];
+    return await checkDispatchedKeysViaServer(allKeys, true);
   } catch (error) {
     console.error('Error getting dispatch history:', error);
     return [];
@@ -488,41 +450,7 @@ export function isRecordMatch(r1?: any, r2?: any): boolean {
  * Tests whether dispatched_history table is currently accepting writes from the anon client
  */
 export async function testDispatchedHistoryWrite(): Promise<{ writable: boolean; isRlsError?: boolean; error?: string }> {
-  const client = getSupabaseClient();
-  if (!client) return { writable: false, error: 'Supabase client not configured' };
-
-  try {
-    const probeKey = '___rls_probe_ping___';
-    const { error: insErr } = await client.from('dispatched_history').upsert({
-      key: probeKey,
-      dispatch_date: getTodayISO(),
-      dispatch_by: 'Probe Ping'
-    }, { onConflict: 'key' });
-
-    if (insErr) {
-      // Test if RPC log_dispatch function works (SECURITY DEFINER)
-      try {
-        const { error: rpcErr } = await client.rpc('log_dispatch', {
-          p_key: probeKey,
-          p_dispatch_date: getTodayISO(),
-          p_dispatch_by: 'Probe Ping'
-        });
-        if (!rpcErr) {
-          await client.from('dispatched_history').delete().eq('key', probeKey);
-          return { writable: true };
-        }
-      } catch (e) {}
-
-      const isRls = insErr.code === '42501' || insErr.message?.toLowerCase().includes('row-level security') || insErr.message?.toLowerCase().includes('violates');
-      return { writable: false, isRlsError: isRls, error: insErr.message };
-    }
-
-    // Clean up probe record immediately
-    await client.from('dispatched_history').delete().eq('key', probeKey);
-    return { writable: true };
-  } catch (err: any) {
-    return { writable: false, error: err?.message };
-  }
+  return testDispatchedWriteViaServer();
 }
 
 /**

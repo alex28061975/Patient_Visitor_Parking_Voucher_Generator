@@ -344,4 +344,133 @@ ON ddl_command_end
 WHEN TAG IN ('CREATE TABLE')
 EXECUTE FUNCTION public.rls_auto_enable();
 
+-- ==============================================================================
+-- 7. SILENT BLOCKLIST TABLE & TRANSACTIONAL REPLACEMENT RPC
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS public.blocklist (
+  id TEXT PRIMARY KEY,
+  form_id TEXT,
+  hospital_site TEXT,
+  ward_dept TEXT,
+  date_required TEXT,
+  expiry_date TEXT,
+  vrm TEXT NOT NULL,
+  driver_name TEXT,
+  phone TEXT,
+  email TEXT,
+  voucher_code TEXT,
+  reason TEXT NOT NULL,
+  added_at TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_blocklist_vrm ON public.blocklist (vrm);
+
+ALTER TABLE public.blocklist ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON public.blocklist FROM anon, public;
+GRANT SELECT ON public.blocklist TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.blocklist TO service_role;
+
+DROP POLICY IF EXISTS "Allow public all on blocklist" ON public.blocklist;
+DROP POLICY IF EXISTS "blocklist_select_authenticated" ON public.blocklist;
+CREATE POLICY "blocklist_select_authenticated"
+  ON public.blocklist
+  FOR SELECT
+  TO authenticated
+  USING (auth.role() = 'authenticated');
+
+CREATE OR REPLACE FUNCTION public.replace_blocklist(entries JSONB)
+RETURNS SETOF public.blocklist
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_count INTEGER := 0;
+BEGIN
+  IF entries IS NULL OR jsonb_typeof(entries) <> 'array' THEN
+    RAISE EXCEPTION 'entries must be a JSON array';
+  END IF;
+
+  SELECT jsonb_array_length(entries) INTO v_count;
+
+  DELETE FROM public.blocklist b
+  WHERE NOT EXISTS (
+    SELECT 1
+    FROM jsonb_to_recordset(entries) AS x(
+      id TEXT,
+      form_id TEXT,
+      hospital_site TEXT,
+      ward_dept TEXT,
+      date_required TEXT,
+      expiry_date TEXT,
+      vrm TEXT,
+      driver_name TEXT,
+      phone TEXT,
+      email TEXT,
+      voucher_code TEXT,
+      reason TEXT,
+      added_at TEXT
+    )
+    WHERE UPPER(REGEXP_REPLACE(COALESCE(x.vrm, ''), '\s+', '', 'g')) =
+          UPPER(REGEXP_REPLACE(COALESCE(b.vrm, ''), '\s+', '', 'g'))
+  );
+
+  IF v_count > 0 THEN
+    INSERT INTO public.blocklist (
+      id, form_id, hospital_site, ward_dept, date_required, expiry_date,
+      vrm, driver_name, phone, email, voucher_code, reason, added_at
+    )
+    SELECT
+      COALESCE(NULLIF(TRIM(x.id), ''), 'blk_' || md5(UPPER(REGEXP_REPLACE(x.vrm, '\s+', '', 'g')))),
+      x.form_id,
+      x.hospital_site,
+      x.ward_dept,
+      x.date_required,
+      x.expiry_date,
+      UPPER(TRIM(x.vrm)),
+      x.driver_name,
+      x.phone,
+      x.email,
+      COALESCE(NULLIF(TRIM(x.voucher_code), ''), 'BLOCKED'),
+      COALESCE(NULLIF(TRIM(x.reason), ''), 'Administrative block'),
+      COALESCE(NULLIF(TRIM(x.added_at), ''), NOW()::TEXT)
+    FROM jsonb_to_recordset(entries) AS x(
+      id TEXT,
+      form_id TEXT,
+      hospital_site TEXT,
+      ward_dept TEXT,
+      date_required TEXT,
+      expiry_date TEXT,
+      vrm TEXT,
+      driver_name TEXT,
+      phone TEXT,
+      email TEXT,
+      voucher_code TEXT,
+      reason TEXT,
+      added_at TEXT
+    )
+    ON CONFLICT (vrm) DO UPDATE SET
+      id = EXCLUDED.id,
+      form_id = EXCLUDED.form_id,
+      hospital_site = EXCLUDED.hospital_site,
+      ward_dept = EXCLUDED.ward_dept,
+      date_required = EXCLUDED.date_required,
+      expiry_date = EXCLUDED.expiry_date,
+      driver_name = EXCLUDED.driver_name,
+      phone = EXCLUDED.phone,
+      email = EXCLUDED.email,
+      voucher_code = EXCLUDED.voucher_code,
+      reason = EXCLUDED.reason,
+      added_at = EXCLUDED.added_at;
+  END IF;
+
+  RETURN QUERY SELECT * FROM public.blocklist ORDER BY added_at DESC NULLS LAST, id ASC;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.replace_blocklist(JSONB) FROM public, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.replace_blocklist(JSONB) TO service_role;
+
 COMMIT;

@@ -26,7 +26,8 @@ import {
 
 // CSV Database Imports
 import { INITIAL_DEMO_CSV } from "./data/defaultCsv";
-import { isVrmSilentBlockedSync } from "./lib/blocklist";
+import { isVrmSilentBlockedSync, isVrmBlocked, hydrateBlocklistFromServer } from "./lib/blocklist";
+import { apiFetch } from "./lib/apiClient";
 import { CsvPermitRecord, parsePermitCsv, parseDateToISO, addDays, formatPhoneNumber, ParsedVoucherData, addDaysSafe, parseDateRange, getDatesInRange, cleanVoucherCodeValue, exportToExcel, isVoucherCodeMatch, sortRecordsByFormIdDesc, getMatchingPermits, isDateRequiredOutsideValidWindow, isPermitExpiredBackdate, getTodayISO, checkIsBlockedDuplicate, parseFullDateTimeMs, normalizeVouchersList, isRecordCancelled, getRequestedPermitDateISO, isVoucherExactPeriodEligible, isVoucherAvailableStatus, isVoucherVrmCompatible, clearDuplicateCheckCache, extractRecordSubmissionTimeMs, extractRecordNumericFormId, isPermitFuture } from "./utils/csvParser";
 // ⭐ FIX: Import canonical voucher validation helper
 import { isVoucherForPermitDateRange, validateManualVoucherChange, getVoucherValidFromISO, getVoucherValidToISO, normalizeDateToISO, addDaysISO } from "./utils/voucherValidation";
@@ -47,6 +48,7 @@ import {
   syncDispatchedToSupabase, 
   bulkSyncDispatchedToSupabase,
   deleteDispatchedFromSupabase,
+  deleteDispatchedKeysFromSupabase,
   clearSupabaseDispatches,
   cleanupCorruptedDispatchedKeys,
   subscribeToSupabaseChanges,
@@ -61,6 +63,342 @@ export interface EmailTrackingInfo {
   openedAt?: string;
   openCount?: number;
   trackingId?: string;
+}
+
+export interface DispatchStateSnapshot {
+  dispatchedKeys: string[];
+  dispatchDates: Record<string, string>;
+  dispatchBy: Record<string, string>;
+  unsentKeys: string[];
+}
+
+export interface ReplacementResendDeps {
+  getFormData: () => PermitData;
+  getDatabase: () => CsvPermitRecord[];
+  getVouchersDatabase: () => ParsedVoucherData[];
+  getCustomVouchers: () => Record<string, string>;
+  getEmailTracking: () => Record<string, EmailTrackingInfo>;
+  applyEmailTracking: (next: Record<string, EmailTrackingInfo>) => void;
+  applyVouchersDatabase: (next: ParsedVoucherData[]) => void;
+  applyDatabase: (next: CsvPermitRecord[]) => void;
+  applyCustomVouchers: (next: Record<string, string>) => void;
+  applyFormData: (next: PermitData) => void;
+  storageMode: StorageMode;
+  isSupabaseConfigured: () => boolean;
+  checkVrmBlocked?: (vrm: string, checkDate?: string) => Promise<boolean>;
+  resendEmailApi: (payload: Record<string, any>) => Promise<{ ok: boolean; status?: number; voucherCode?: string; trackingId?: string; error?: string }>;
+  confirmEmailApi?: (trackingId: string) => Promise<boolean>;
+  revertEmailApi?: (trackingId: string) => Promise<boolean>;
+  updatePermitInSupabase: (rec: CsvPermitRecord) => Promise<boolean>;
+  markAsDispatched: (vrm?: string, email?: string, record?: CsvPermitRecord) => Promise<boolean>;
+  rollbackDispatch?: (
+    originalRecord: CsvPermitRecord,
+    wasPreviouslyDispatched: boolean,
+    previousSnapshot?: DispatchStateSnapshot
+  ) => Promise<boolean>;
+  isRecordCurrentlyDispatched?: (rec: CsvPermitRecord) => boolean;
+  getDispatchSnapshot?: () => DispatchStateSnapshot;
+  applyDispatchSnapshot?: (snap: DispatchStateSnapshot) => void;
+  selectRecord: (rec: CsvPermitRecord) => void;
+  sendOne: (rec: CsvPermitRecord, opts: { skipDispatch?: boolean; isReplacement?: boolean; clipboardSession?: ClipboardWriteSession }) => Promise<boolean | void>;
+  showToast: (msg: string, type?: "success" | "info" | "warning" | "error") => void;
+  storage?: {
+    getItem: (k: string) => string | null;
+    setItem: (k, v: string) => void;
+    removeItem: (k: string) => void;
+  };
+}
+
+export async function executeReplacementResendTransaction(
+  record: CsvPermitRecord,
+  clipboardSession: ClipboardWriteSession | undefined,
+  deps: ReplacementResendDeps
+): Promise<boolean> {
+  const storage = deps.storage ?? safeLocalStorage;
+  const currentForm = deps.getFormData();
+
+  // A resend is permitted only for a replacement code explicitly assigned
+  // through Choose a code or EDIT. Never auto-allocate a code from this action.
+  let newVoucherCode = (
+    record.replacementCode ||
+    (isRecordMatch(record, currentForm) ? currentForm.replacementCode : "") ||
+    ""
+  ).trim().toUpperCase();
+
+  if (!newVoucherCode || newVoucherCode === "-" || newVoucherCode === "CANCELLED" || newVoucherCode === "PENDING") {
+    clipboardSession?.rejectBlob(new Error("No replacement code has been explicitly assigned"));
+    deps.showToast("No replacement code has been explicitly assigned. Use Choose a code or EDIT first.", "warning");
+    return false;
+  }
+
+  // Step 0: Authoritative blocklist pre-check BEFORE /api/emails/resend or ANY state/database mutations
+  const blockCheckDate = record.validFrom || record.dateRequired || currentForm.validFrom || getTodayISO();
+  let isBlocked = false;
+  try {
+    isBlocked = deps.checkVrmBlocked
+      ? await deps.checkVrmBlocked(record.vrm || "", blockCheckDate)
+      : isVrmSilentBlockedSync(record.vrm || "", blockCheckDate);
+  } catch {
+    isBlocked = isVrmSilentBlockedSync(record.vrm || "", blockCheckDate);
+  }
+  if (isBlocked) {
+    clipboardSession?.rejectBlob(new Error("Vehicle registration is blocked"));
+    deps.showToast("Unable to generate a QR code for this vehicle — please contact the parking admin team.", "error");
+    return false;
+  }
+
+  // Snapshot ALL state and persisted localStorage keys before any mutations
+  const snapshotDb = deps.getDatabase().map(item => ({ ...item }));
+  const snapshotVouchers = deps.getVouchersDatabase().map(v => ({ ...v }));
+  const snapshotCustomVouchers = { ...deps.getCustomVouchers() };
+  const snapshotEmailTracking: Record<string, EmailTrackingInfo> = {};
+  for (const [k, v] of Object.entries(deps.getEmailTracking() || {})) {
+    snapshotEmailTracking[k] = { ...v };
+  }
+  const snapshotFormData = { ...currentForm };
+  const snapshotOriginalRecord = snapshotDb.find(item => isRecordMatch(item, record)) || { ...record };
+  const rawDispatchSnap = deps.getDispatchSnapshot ? deps.getDispatchSnapshot() : undefined;
+  const dispatchSnapshot: DispatchStateSnapshot | undefined = rawDispatchSnap
+    ? {
+        dispatchedKeys: [...rawDispatchSnap.dispatchedKeys],
+        dispatchDates: { ...rawDispatchSnap.dispatchDates },
+        dispatchBy: { ...rawDispatchSnap.dispatchBy },
+        unsentKeys: [...rawDispatchSnap.unsentKeys]
+      }
+    : undefined;
+  const wasPreviouslyDispatched = deps.isRecordCurrentlyDispatched
+    ? deps.isRecordCurrentlyDispatched(snapshotOriginalRecord)
+    : Boolean(snapshotOriginalRecord.isDispatched);
+
+  const storageKeys = [
+    "concessions_email_tracking",
+    "concessions_vouchers_db",
+    "concessions_permit_db",
+    "concessions_custom_vouchers",
+    "concessions_dispatched_keys",
+    "concessions_dispatch_dates",
+    "concessions_dispatch_by",
+    "concessions_unsent_keys"
+  ] as const;
+  const snapshotStorage: Record<string, string | null> = {};
+  for (const k of storageKeys) {
+    snapshotStorage[k] = storage.getItem(k);
+  }
+
+  const restoreAllSnapshots = () => {
+    deps.applyEmailTracking(snapshotEmailTracking);
+    deps.applyVouchersDatabase(snapshotVouchers);
+    deps.applyDatabase(snapshotDb);
+    deps.applyCustomVouchers(snapshotCustomVouchers);
+    deps.applyFormData(snapshotFormData);
+    if (dispatchSnapshot && deps.applyDispatchSnapshot) {
+      deps.applyDispatchSnapshot({
+        dispatchedKeys: [...dispatchSnapshot.dispatchedKeys],
+        dispatchDates: { ...dispatchSnapshot.dispatchDates },
+        dispatchBy: { ...dispatchSnapshot.dispatchBy },
+        unsentKeys: [...dispatchSnapshot.unsentKeys]
+      });
+    }
+    for (const k of storageKeys) {
+      const prevVal = snapshotStorage[k];
+      if (prevVal === null || prevVal === undefined) {
+        storage.removeItem(k);
+      } else {
+        storage.setItem(k, prevVal);
+      }
+    }
+  };
+
+  const pk = getRecordPrimaryKey(record) || record.vrm || String(record.id || "");
+  const normVrm = (record.vrm || "").toUpperCase().replace(/\s+/g, "");
+
+  // Step 1: Await backend /api/emails/resend (records PREPARED status) and abort immediately if non-OK
+  let trackingId = "";
+  try {
+    const resendRes = await deps.resendEmailApi({
+      recordKey: pk,
+      vrm: record.vrm,
+      driverName: record.driverName,
+      email: record.email,
+      requestedCode: newVoucherCode,
+      validFrom: record.validFrom || record.dateRequired,
+      validTo: record.validTo,
+      todayDate: record.todayDate || currentForm.todayDate || getTodayISO()
+    });
+    if (!resendRes || !resendRes.ok) {
+      const errMsg = resendRes?.error || `Email registration failed${resendRes?.status ? ` (HTTP ${resendRes.status})` : ""}`;
+      clipboardSession?.rejectBlob(new Error(errMsg));
+      deps.showToast(`❌ Replacement resend aborted: ${errMsg}`, "error");
+      return false;
+    }
+    if (resendRes.voucherCode) {
+      newVoucherCode = String(resendRes.voucherCode).trim().toUpperCase();
+    }
+    trackingId = resendRes.trackingId || "";
+  } catch (e: any) {
+    const errMsg = e?.message || "Email registration request failed";
+    clipboardSession?.rejectBlob(e);
+    deps.showToast(`❌ Replacement resend aborted: ${errMsg}`, "error");
+    return false;
+  }
+
+  const originalCode = record.originalVoucherCode || record.voucherCode || record.prePaidCode;
+  const oldCode = originalCode || "";
+
+  const updatedRecord: CsvPermitRecord = {
+    ...record,
+    voucherCode: newVoucherCode,
+    voucherCodesText: newVoucherCode,
+    prePaidCode: newVoucherCode,
+    originalVoucherCode: originalCode,
+    replacementCode: undefined,
+    isResend: false,
+    emailType: undefined,
+    emailTemplate: undefined,
+    status: "SENT",
+    isDispatched: true
+  };
+
+  // Step 2: Await permit persistence to central database before local mutations
+  if (deps.storageMode === "cloud" && deps.isSupabaseConfigured()) {
+    let permitUpdateOk = false;
+    try {
+      permitUpdateOk = await deps.updatePermitInSupabase(updatedRecord);
+    } catch {
+      permitUpdateOk = false;
+    }
+    if (!permitUpdateOk) {
+      if (trackingId && deps.revertEmailApi) {
+        await deps.revertEmailApi(trackingId).catch(() => false);
+      }
+      clipboardSession?.rejectBlob(new Error("Failed to update permit record in database"));
+      deps.showToast("❌ Failed to update permit record in database. Replacement was not sent.", "error");
+      return false;
+    }
+  }
+
+  // Step 3: Apply local state updates (holding email tracking at PREPARED until sendOne completes) and persist dispatch history
+  const nextTrackingPrepared: Record<string, EmailTrackingInfo> = { ...snapshotEmailTracking };
+  const preparedInfo: EmailTrackingInfo = {
+    status: "PREPARED",
+    trackingId
+  };
+  if (pk) nextTrackingPrepared[pk] = preparedInfo;
+  if (normVrm) nextTrackingPrepared[normVrm] = preparedInfo;
+  if (record.formId) nextTrackingPrepared[String(record.formId)] = preparedInfo;
+  if (record.id) nextTrackingPrepared[String(record.id)] = preparedInfo;
+  deps.applyEmailTracking(nextTrackingPrepared);
+  storage.setItem("concessions_email_tracking", JSON.stringify(nextTrackingPrepared));
+
+  const codesToMark = [oldCode, newVoucherCode].filter(c => c && c !== "-" && c !== "CANCELLED");
+  if (codesToMark.length > 0) {
+    const nextVouchers = snapshotVouchers.map(v => {
+      if (!v || !v.code) return v;
+      const clean = cleanVoucherCodeValue(v.code).toUpperCase();
+      if (codesToMark.some(c => clean === cleanVoucherCodeValue(c).toUpperCase() || v.code.toUpperCase() === c.toUpperCase())) {
+        return { ...v, isUsed: true, status: "used" };
+      }
+      return v;
+    });
+    deps.applyVouchersDatabase(nextVouchers);
+    storage.setItem("concessions_vouchers_db", JSON.stringify(nextVouchers));
+  }
+
+  const nextDb = snapshotDb.map(item => isRecordMatch(item, record) ? updatedRecord : item);
+  deps.applyDatabase(nextDb);
+  storage.setItem("concessions_permit_db", JSON.stringify(nextDb));
+
+  const nextCustomVouchers = { ...snapshotCustomVouchers };
+  if (record.formId) nextCustomVouchers[String(record.formId)] = newVoucherCode;
+  if (record.id) nextCustomVouchers[String(record.id)] = newVoucherCode;
+  const dateISO = normalizeDateToISO(record.dateRequired || record.validFrom);
+  if (normVrm && dateISO) {
+    nextCustomVouchers[`${normVrm}_${dateISO}`] = newVoucherCode;
+  }
+  deps.applyCustomVouchers(nextCustomVouchers);
+  storage.setItem("concessions_custom_vouchers", JSON.stringify(nextCustomVouchers));
+
+  // Mark dispatched and verify persistence; roll back EVERYTHING on failure
+  let dispatchOk = false;
+  try {
+    dispatchOk = await deps.markAsDispatched(record.vrm, record.email, updatedRecord);
+  } catch {
+    dispatchOk = false;
+  }
+
+  if (!dispatchOk) {
+    restoreAllSnapshots();
+    if (deps.storageMode === "cloud" && deps.isSupabaseConfigured()) {
+      await deps.updatePermitInSupabase(snapshotOriginalRecord).catch(() => false);
+    }
+    if (trackingId && deps.revertEmailApi) {
+      await deps.revertEmailApi(trackingId).catch(() => false);
+    }
+    clipboardSession?.rejectBlob(new Error("Mark as dispatched failed"));
+    deps.showToast("❌ Replacement dispatch failed: could not persist status. Changes rolled back.", "error");
+    return false;
+  }
+
+  // Step 4: Update formData and open Outlook email composer
+  deps.applyFormData({
+    ...snapshotFormData,
+    id: updatedRecord.id,
+    formId: updatedRecord.formId,
+    vrm: updatedRecord.vrm,
+    voucherCodesText: newVoucherCode,
+    replacementCode: undefined,
+    isResend: true,
+    emailType: "RESEND_CONCESSION",
+    emailTemplate: "replacement",
+    status: "SENT"
+  });
+
+  deps.selectRecord(updatedRecord);
+  let sendResult: boolean | void = false;
+  let sendErrMsg = "";
+  try {
+    sendResult = await deps.sendOne(updatedRecord, { skipDispatch: true, isReplacement: true, clipboardSession });
+  } catch (err: any) {
+    sendResult = false;
+    sendErrMsg = err?.message || "Email dispatch failed";
+  }
+
+  if (sendResult === false) {
+    restoreAllSnapshots();
+    if (deps.storageMode === "cloud" && deps.isSupabaseConfigured()) {
+      await deps.updatePermitInSupabase(snapshotOriginalRecord).catch(() => false);
+      if (deps.rollbackDispatch) {
+        await deps.rollbackDispatch(snapshotOriginalRecord, wasPreviouslyDispatched, dispatchSnapshot).catch(() => false);
+      }
+    }
+    if (trackingId && deps.revertEmailApi) {
+      await deps.revertEmailApi(trackingId).catch(() => false);
+    }
+    clipboardSession?.rejectBlob(new Error(sendErrMsg || "Replacement email dispatch failed"));
+    deps.showToast(`❌ Replacement resend failed${sendErrMsg ? `: ${sendErrMsg}` : ""}. All changes rolled back.`, "error");
+    return false;
+  }
+
+  // Step 5: Confirm tracking status to SENT only after sendOne completes cleanly
+  if (trackingId && deps.confirmEmailApi) {
+    await deps.confirmEmailApi(trackingId).catch(() => false);
+  }
+  const sentAt = new Date().toISOString();
+  const nextTrackingSent: Record<string, EmailTrackingInfo> = { ...nextTrackingPrepared };
+  const sentInfo: EmailTrackingInfo = {
+    status: "SENT",
+    sentAt,
+    trackingId
+  };
+  if (pk) nextTrackingSent[pk] = sentInfo;
+  if (normVrm) nextTrackingSent[normVrm] = sentInfo;
+  if (record.formId) nextTrackingSent[String(record.formId)] = sentInfo;
+  if (record.id) nextTrackingSent[String(record.id)] = sentInfo;
+  deps.applyEmailTracking(nextTrackingSent);
+  storage.setItem("concessions_email_tracking", JSON.stringify(nextTrackingSent));
+
+  deps.showToast(`✅ Replacement permit resent with new code ${newVoucherCode}. Status updated to SENT.`, "success");
+  return true;
 }
 
 // Helper to format string to Title Case (capitalize each word)
@@ -1038,6 +1376,10 @@ export default function App() {
     } catch (e) {}
     return {};
   });
+  const emailTrackingRef = useRef<Record<string, EmailTrackingInfo>>(emailTracking);
+  useEffect(() => {
+    emailTrackingRef.current = emailTracking;
+  }, [emailTracking]);
 
   const formDataRef = useRef(formData);
   useEffect(() => {
@@ -1049,7 +1391,7 @@ export default function App() {
     const pollEmailStatuses = async () => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       try {
-        const res = await fetch("/api/emails/statuses");
+        const res = await apiFetch("/api/emails/statuses");
         if (!res.ok) return;
         const data = await res.json();
         if (data?.statuses) {
@@ -1212,7 +1554,9 @@ export default function App() {
   const [lastProcessedDate, setLastProcessedDate] = useState<string>("");
   const [lastDbLength, setLastDbLength] = useState<number>(0);
   const refreshInFlightRef = useRef<boolean>(false);
+  const refreshPendingRef = useRef<boolean>(false);
   const refreshRequestIdRef = useRef<number>(0);
+  const refreshDatabaseRef = useRef<any>(null);
   const lastOfflineDbRawRef = useRef<string | null>(null);
 
   // Helper to clear replacement state and promote replacement code to primary code on successful dispatch
@@ -1361,6 +1705,29 @@ export default function App() {
     const todayISO = getTodayISO();
     const currentUser = currentUserName || 'System User';
 
+    const prevDispatched = [...dispatchedKeysRef.current];
+    const prevDates = { ...dispatchDatesRef.current };
+    const prevBy = { ...dispatchByRef.current };
+    const prevUnsent = [...unsentKeysRef.current];
+
+    const rollbackState = () => {
+      dispatchedKeysRef.current = prevDispatched;
+      setDispatchedKeys(prevDispatched);
+      safeLocalStorage.setItem("concessions_dispatched_keys", JSON.stringify(prevDispatched));
+
+      dispatchDatesRef.current = prevDates;
+      setDispatchDates(prevDates);
+      safeLocalStorage.setItem("concessions_dispatch_dates", JSON.stringify(prevDates));
+
+      dispatchByRef.current = prevBy;
+      setDispatchBy(prevBy);
+      safeLocalStorage.setItem("concessions_dispatch_by", JSON.stringify(prevBy));
+
+      unsentKeysRef.current = prevUnsent;
+      setUnsentKeys(prevUnsent);
+      safeLocalStorage.setItem("concessions_unsent_keys", JSON.stringify(prevUnsent));
+    };
+
     // If in Offline Local Storage mode, save directly to localStorage without network calls
     if (storageModeRef.current === "offline") {
       setDispatchedKeys(prev => {
@@ -1387,6 +1754,7 @@ export default function App() {
         const next = prev.filter(k => !combinedKeys.includes(k));
         if (next.length === prev.length) return prev;
         unsentKeysRef.current = next;
+        safeLocalStorage.setItem("concessions_unsent_keys", JSON.stringify(next));
         return next;
       });
       handleReplacementSuccessCleanup(targetRecord);
@@ -1428,12 +1796,7 @@ export default function App() {
 
       if (!result.success) {
         console.error("❌ [Supabase Dispatch Write Error]:", result.error);
-        // Rollback on error
-        setDispatchedKeys(prev => {
-          const next = prev.filter(k => !combinedKeys.includes(k));
-          dispatchedKeysRef.current = next;
-          return next;
-        });
+        rollbackState();
         alert(`❌ Database Error: ${result.error || 'Failed to save dispatch status in database.'}`);
         return false;
       }
@@ -1444,18 +1807,14 @@ export default function App() {
       safeLocalStorage.setItem("concessions_dispatched_keys", JSON.stringify(dispatchedKeysRef.current));
       safeLocalStorage.setItem("concessions_dispatch_dates", JSON.stringify(dispatchDatesRef.current));
       safeLocalStorage.setItem("concessions_dispatch_by", JSON.stringify(dispatchByRef.current));
+      safeLocalStorage.setItem("concessions_unsent_keys", JSON.stringify(unsentKeysRef.current));
 
       handleReplacementSuccessCleanup(targetRecord);
 
       return true;
     } catch (err: any) {
       console.error("❌ [Supabase Dispatch Exception]:", err);
-      // Rollback on exception
-      setDispatchedKeys(prev => {
-        const next = prev.filter(k => !combinedKeys.includes(k));
-        dispatchedKeysRef.current = next;
-        return next;
-      });
+      rollbackState();
       alert(`❌ Dispatch Exception: ${err.message || 'Unknown database error'}`);
       return false;
     }
@@ -1476,6 +1835,29 @@ export default function App() {
     const pk = getRecordPrimaryKey(targetRecord);
     const allKeys = getRecordKeys(targetRecord);
     const combinedKeys = Array.from(new Set([pk, ...allKeys].filter(Boolean)));
+
+    const prevDispatched = [...dispatchedKeysRef.current];
+    const prevDates = { ...dispatchDatesRef.current };
+    const prevBy = { ...dispatchByRef.current };
+    const prevUnsent = [...unsentKeysRef.current];
+
+    const rollbackState = () => {
+      dispatchedKeysRef.current = prevDispatched;
+      setDispatchedKeys(prevDispatched);
+      safeLocalStorage.setItem("concessions_dispatched_keys", JSON.stringify(prevDispatched));
+
+      dispatchDatesRef.current = prevDates;
+      setDispatchDates(prevDates);
+      safeLocalStorage.setItem("concessions_dispatch_dates", JSON.stringify(prevDates));
+
+      dispatchByRef.current = prevBy;
+      setDispatchBy(prevBy);
+      safeLocalStorage.setItem("concessions_dispatch_by", JSON.stringify(prevBy));
+
+      unsentKeysRef.current = prevUnsent;
+      setUnsentKeys(prevUnsent);
+      safeLocalStorage.setItem("concessions_unsent_keys", JSON.stringify(prevUnsent));
+    };
 
     // Optimistically update React state immediately in both offline and cloud modes
     setDispatchedKeys(prev => {
@@ -1503,6 +1885,7 @@ export default function App() {
     const nextUnsentKeys = Array.from(new Set([...(unsentKeysRef.current || []), ...combinedKeys]));
     unsentKeysRef.current = nextUnsentKeys;
     setUnsentKeys(nextUnsentKeys);
+    safeLocalStorage.setItem("concessions_unsent_keys", JSON.stringify(nextUnsentKeys));
 
     // If in Offline Local Storage mode, state and storage are already updated
     if (storageModeRef.current === "offline") {
@@ -1515,13 +1898,7 @@ export default function App() {
       const result = await unmarkRecordAsDispatched(targetRecord);
       if (!result.success) {
         console.error("❌ [Supabase Unmark Error]:", result.error);
-        // The delete failed, so restore the previous dispatched state and
-        // remove the local unsent override.
-        dispatchedKeysRef.current = Array.from(new Set([...(dispatchedKeysRef.current || []), ...combinedKeys]));
-        setDispatchedKeys(dispatchedKeysRef.current);
-        const rolledBackUnsent = (unsentKeysRef.current || []).filter(k => !combinedKeys.includes(k));
-        unsentKeysRef.current = rolledBackUnsent;
-        setUnsentKeys(rolledBackUnsent);
+        rollbackState();
         alert(`❌ Database Error: ${result.error || 'Failed to remove dispatch status.'}`);
         return false;
       }
@@ -1533,16 +1910,19 @@ export default function App() {
       return true;
     } catch (err: any) {
       console.error("❌ [Supabase Unmark Exception]:", err);
-      dispatchedKeysRef.current = Array.from(new Set([...(dispatchedKeysRef.current || []), ...combinedKeys]));
-      setDispatchedKeys(dispatchedKeysRef.current);
-      const rolledBackUnsent = (unsentKeysRef.current || []).filter(k => !combinedKeys.includes(k));
-      unsentKeysRef.current = rolledBackUnsent;
-      setUnsentKeys(rolledBackUnsent);
+      rollbackState();
       return false;
     }
   }, []);
 
   const clearDispatchedHistory = async () => {
+    if (isSupabaseConfigured()) {
+      const clearedOk = await clearSupabaseDispatches();
+      if (!clearedOk) {
+        alert("❌ Database Error: Failed to clear dispatch history in Supabase.");
+        return;
+      }
+    }
     dispatchedKeysRef.current = [];
     unsentKeysRef.current = [];
     dispatchDatesRef.current = {};
@@ -1551,10 +1931,12 @@ export default function App() {
     setDispatchedKeys([]);
     setUnsentKeys([]);
     setDispatchDates({});
-    
-    if (isSupabaseConfigured()) {
-      await clearSupabaseDispatches();
-    }
+    setDispatchBy({});
+
+    safeLocalStorage.removeItem("concessions_dispatched_keys");
+    safeLocalStorage.removeItem("concessions_dispatch_dates");
+    safeLocalStorage.removeItem("concessions_dispatch_by");
+    safeLocalStorage.removeItem("concessions_unsent_keys");
   };
 
   useEffect(() => {
@@ -1697,7 +2079,10 @@ export default function App() {
 
     if (!isSupabaseConfigured()) return;
 
-    if (refreshInFlightRef.current) return;
+    if (refreshInFlightRef.current) {
+      refreshPendingRef.current = true;
+      return;
+    }
     refreshInFlightRef.current = true;
     const reqId = ++refreshRequestIdRef.current;
 
@@ -1729,9 +2114,23 @@ export default function App() {
             rec.dateRequired === target.dateRequired &&
             rec.voucherCode === target.voucherCode &&
             rec.voucherCodesText === target.voucherCodesText &&
+            rec.prePaidCode === target.prePaidCode &&
+            rec.replacementCode === target.replacementCode &&
+            rec.originalVoucherCode === target.originalVoucherCode &&
             rec.status === target.status &&
             rec.isCancelled === target.isCancelled &&
-            rec.startTime === target.startTime;
+            rec.cancellationReason === target.cancellationReason &&
+            rec.validFrom === target.validFrom &&
+            rec.validTo === target.validTo &&
+            rec.dateExpiry === target.dateExpiry &&
+            rec.email === target.email &&
+            rec.phone === target.phone &&
+            rec.ward === target.ward &&
+            rec.department === target.department &&
+            rec.hospital === target.hospital &&
+            rec.site === target.site &&
+            rec.startTime === target.startTime &&
+            rec.completionTime === target.completionTime;
         });
 
         if (!isIdentical) {
@@ -1895,8 +2294,15 @@ export default function App() {
       if (!silent) {
         setIsLoadingHistory(false);
       }
+      if (refreshPendingRef.current) {
+        refreshPendingRef.current = false;
+        setTimeout(() => {
+          refreshDatabaseRef.current?.(overrideFilter, silent);
+        }, 50);
+      }
     }
   }, []);
+  refreshDatabaseRef.current = refreshDatabase;
 
   // 🔥 Manual Sync Handler for Cloud Mode
   const handleManualSync = useCallback(async () => {
@@ -2103,6 +2509,7 @@ export default function App() {
       }
 
       await initSupabaseConfig();
+      await hydrateBlocklistFromServer().catch(() => null);
 
       // One-time startup cleanup: remove only the known voucher codes that are
       // not present in the authoritative uploaded Vouchers.csv.
@@ -3173,152 +3580,128 @@ export default function App() {
   }, [showToast]);
 
   const handleResendRecord = useCallback(async (record: CsvPermitRecord, clipboardSession?: ClipboardWriteSession) => {
-    // A resend is permitted only for a replacement code explicitly assigned
-    // through Choose a code or EDIT. Never auto-allocate a code from this action.
-    const currentForm = formDataRef.current;
-    let newVoucherCode = (
-      record.replacementCode ||
-      (isRecordMatch(record, currentForm) ? currentForm.replacementCode : "") ||
-      ""
-    ).trim().toUpperCase();
-
-    if (!newVoucherCode || newVoucherCode === "-" || newVoucherCode === "CANCELLED" || newVoucherCode === "PENDING") {
-      clipboardSession?.rejectBlob(new Error("No replacement code has been explicitly assigned"));
-      showToast("No replacement code has been explicitly assigned. Use Choose a code or EDIT first.", "warning");
-      return;
-    }
-
-    // 2. Call backend /api/emails/resend to create tracking record & pixel
-    const pk = getRecordPrimaryKey(record) || record.vrm || String(record.id || "");
-    const normVrm = (record.vrm || "").toUpperCase().replace(/\s+/g, "");
-    let trackingId = "";
-
-    try {
-      const res = await fetch("/api/emails/resend", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          recordKey: pk,
-          vrm: record.vrm,
-          driverName: record.driverName,
-          email: record.email,
-          requestedCode: newVoucherCode,
-          validFrom: record.validFrom || record.dateRequired,
-          validTo: record.validTo,
-          todayDate: record.todayDate || currentForm.todayDate || getTodayISO()
-        })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.voucherCode) newVoucherCode = data.voucherCode;
-        trackingId = data.trackingId;
-      }
-    } catch (e) {
-      console.warn("Backend resend call failed, falling back to local tracking:", e);
-      trackingId = `trk_${Date.now()}`;
-    }
-
-    const sentAt = new Date().toISOString();
-
-    // 3. Immediately update emailTracking state so the badge changes to SENT right away
-    setEmailTracking(prev => {
-      const next = { ...prev };
-      const info: EmailTrackingInfo = {
-        status: "SENT",
-        sentAt,
-        trackingId
-      };
-      if (pk) next[pk] = info;
-      if (normVrm) next[normVrm] = info;
-      if (record.formId) next[String(record.formId)] = info;
-      if (record.id) next[String(record.id)] = info;
-      safeLocalStorage.setItem("concessions_email_tracking", JSON.stringify(next));
-      return next;
-    });
-
-    // 4. Update the record in database: assign newVoucherCode, clear replacement flags, mark SENT
-    const originalCode = record.originalVoucherCode || record.voucherCode || record.prePaidCode;
-    const oldCode = originalCode || "";
-    const codesToMark = [oldCode, newVoucherCode].filter(c => c && c !== "-" && c !== "CANCELLED");
-    if (codesToMark.length > 0) {
-      setVouchersDatabase(prev => {
-        const next = prev.map(v => {
-          if (!v || !v.code) return v;
-          const clean = cleanVoucherCodeValue(v.code).toUpperCase();
-          if (codesToMark.some(c => clean === cleanVoucherCodeValue(c).toUpperCase() || v.code.toUpperCase() === c.toUpperCase())) {
-            return { ...v, isUsed: true, status: "used" };
-          }
-          return v;
-        });
+    return executeReplacementResendTransaction(record, clipboardSession, {
+      getFormData: () => formDataRef.current,
+      getDatabase: () => databaseRef.current || [],
+      getVouchersDatabase: () => vouchersDatabaseRef.current || [],
+      getCustomVouchers: () => customVouchersRef.current || {},
+      getEmailTracking: () => emailTrackingRef.current || {},
+      applyEmailTracking: (next) => {
+        emailTrackingRef.current = next;
+        setEmailTracking(next);
+      },
+      applyVouchersDatabase: (next) => {
         vouchersDatabaseRef.current = next;
-        safeLocalStorage.setItem("concessions_vouchers_db", JSON.stringify(next));
-        return next;
-      });
-    }
-
-    const updatedRecord: CsvPermitRecord = {
-      ...record,
-      voucherCode: newVoucherCode,
-      voucherCodesText: newVoucherCode,
-      prePaidCode: newVoucherCode,
-      originalVoucherCode: originalCode,
-      replacementCode: undefined,
-      isResend: false,
-      emailType: undefined,
-      emailTemplate: undefined,
-      status: "SENT",
-      isDispatched: true
-    };
-
-    setDatabase(prevDb => {
-      const nextDb = prevDb.map(item => isRecordMatch(item, record) ? updatedRecord : item);
-      databaseRef.current = nextDb;
-      safeLocalStorage.setItem("concessions_permit_db", JSON.stringify(nextDb));
-      if (storageModeRef.current === "cloud" && isSupabaseConfigured()) {
-        updatePermitInSupabase(updatedRecord).catch(e => console.error("Targeted permit update after resend failed:", e));
-      }
-      return nextDb;
+        setVouchersDatabase(next);
+      },
+      applyDatabase: (next) => {
+        databaseRef.current = next;
+        setDatabase(next);
+      },
+      applyCustomVouchers: (next) => {
+        customVouchersRef.current = next;
+        setCustomVouchers(next);
+      },
+      applyFormData: (next) => {
+        formDataRef.current = next;
+        setFormData(next);
+      },
+      storageMode: storageModeRef.current,
+      isSupabaseConfigured,
+      checkVrmBlocked: (vrm, checkDate) => isVrmBlocked(vrm, checkDate),
+      resendEmailApi: async (payload) => {
+        const res = await apiFetch("/api/emails/resend", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) {
+          return {
+            ok: false,
+            status: res.status,
+            error: data?.error || `HTTP ${res.status}`
+          };
+        }
+        return {
+          ok: true,
+          status: res.status,
+          voucherCode: data?.voucherCode,
+          trackingId: data?.trackingId
+        };
+      },
+      confirmEmailApi: async (trackingId) => {
+        if (!trackingId) return true;
+        const res = await apiFetch("/api/emails/confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ trackingId })
+        });
+        return res.ok;
+      },
+      revertEmailApi: async (trackingId) => {
+        if (!trackingId) return true;
+        const res = await apiFetch("/api/emails/revert", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ trackingId })
+        });
+        return res.ok;
+      },
+      updatePermitInSupabase,
+      markAsDispatched,
+      isRecordCurrentlyDispatched: (rec) => checkIsRecordDispatched(rec, dispatchedKeysRef.current, unsentKeysRef.current),
+      getDispatchSnapshot: () => ({
+        dispatchedKeys: [...dispatchedKeysRef.current],
+        dispatchDates: { ...dispatchDatesRef.current },
+        dispatchBy: { ...dispatchByRef.current },
+        unsentKeys: [...unsentKeysRef.current]
+      }),
+      applyDispatchSnapshot: (snap) => {
+        dispatchedKeysRef.current = snap.dispatchedKeys;
+        setDispatchedKeys(snap.dispatchedKeys);
+        dispatchDatesRef.current = snap.dispatchDates;
+        setDispatchDates(snap.dispatchDates);
+        dispatchByRef.current = snap.dispatchBy;
+        setDispatchBy(snap.dispatchBy);
+        unsentKeysRef.current = snap.unsentKeys;
+        setUnsentKeys(snap.unsentKeys);
+      },
+      rollbackDispatch: async (origRec, wasPrevDispatched, prevSnap) => {
+        const keys = Array.from(new Set([getRecordPrimaryKey(origRec), ...getRecordKeys(origRec)].filter(Boolean)));
+        if (keys.length === 0) return true;
+        if (!wasPrevDispatched) {
+          return deleteDispatchedKeysFromSupabase(keys);
+        }
+        const prevKeySet = new Set(prevSnap?.dispatchedKeys || []);
+        const keysToRestore = keys.filter((k) => prevKeySet.has(k));
+        const keysToRemove = keys.filter((k) => !prevKeySet.has(k));
+        let ok = true;
+        if (keysToRemove.length > 0) {
+          ok = (await deleteDispatchedKeysFromSupabase(keysToRemove)) && ok;
+        }
+        if (keysToRestore.length > 0) {
+          const items = keysToRestore.map((k) => ({
+            key: k,
+            date: prevSnap?.dispatchDates[k],
+            by: prevSnap?.dispatchBy[k],
+            vrm: origRec.vrm,
+            email: origRec.email
+          }));
+          ok = (await bulkSyncDispatchedToSupabase(items)) && ok;
+        }
+        return ok;
+      },
+      selectRecord: handleSelectRecord,
+      sendOne: async (rec, opts) => {
+        if (!permitCardRef.current?.sendOne) {
+          opts.clipboardSession?.rejectBlob(new Error("PermitCard sendOne unavailable"));
+          return false;
+        }
+        return permitCardRef.current.sendOne(rec, opts);
+      },
+      showToast
     });
-
-    // 5. Update customVouchers map so new code is preserved
-    setCustomVouchers(prev => {
-      const next = { ...prev };
-      if (record.formId) next[String(record.formId)] = newVoucherCode;
-      if (record.id) next[String(record.id)] = newVoucherCode;
-      const dateISO = normalizeDateToISO(record.dateRequired || record.validFrom);
-      if (normVrm && dateISO) {
-        next[`${normVrm}_${dateISO}`] = newVoucherCode;
-      }
-      safeLocalStorage.setItem("concessions_custom_vouchers", JSON.stringify(next));
-      return next;
-    });
-
-    // 6. Mark dispatched
-    await markAsDispatched(record.vrm, record.email, updatedRecord);
-
-    // 7. Update formData with resent state
-    setFormData(prev => ({
-      ...prev,
-      id: updatedRecord.id,
-      formId: updatedRecord.formId,
-      vrm: updatedRecord.vrm,
-      voucherCodesText: newVoucherCode,
-      replacementCode: undefined,
-      isResend: true,
-      emailType: "RESEND_CONCESSION",
-      emailTemplate: "replacement",
-      status: "SENT"
-    }));
-
-    // 8. Open email composer with the new code & tracking pixel (skip redundant dispatch)
-    handleSelectRecord(updatedRecord);
-    if (permitCardRef.current?.sendOne) {
-      await permitCardRef.current.sendOne(updatedRecord, { skipDispatch: true, isReplacement: true, clipboardSession });
-    } else {
-      clipboardSession?.rejectBlob(new Error("PermitCard sendOne unavailable"));
-    }
-
-    showToast(`✅ Replacement permit resent with new code ${newVoucherCode}. Status updated to SENT.`, "success");
   }, [markAsDispatched, handleSelectRecord, showToast]);
 
   const handleDispatchRecord = useCallback(async (record: CsvPermitRecord, clipboardSession?: ClipboardWriteSession) => {

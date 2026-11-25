@@ -610,6 +610,9 @@ export interface VoucherBatchBadgeResult {
   maxExpiryIso?: string;
   formattedDate?: string;
   daysDiff?: number;
+  coverToText?: string;
+  coverToFormatted?: string;
+  coverDaysRemaining?: number;
 }
 
 /**
@@ -634,15 +637,72 @@ export function computeVoucherBatchExpiryBadge(params: {
     referenceDate
   } = params;
 
-  const redResult: VoucherBatchBadgeResult = {
-    type: "red",
-    icon: "▲",
-    text: "No Active Codes Available — Add New Batch",
-    className: "text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-800/60"
+  const matchesSelectedHospital = (v: ParsedVoucherData): boolean => {
+    if (!selectedHospital || selectedHospital === "ALL") return true;
+    const vHosp = String(
+      v.hospital ||
+      v.site ||
+      (v as any).hospitalSite ||
+      (v as any).hospital_site ||
+      (v as any).location ||
+      ""
+    ).trim().toLowerCase();
+
+    if (!vHosp) return true;
+    const sel = selectedHospital.toLowerCase().trim();
+    return (
+      vHosp === sel ||
+      (vHosp.includes("whipps") && sel.includes("whipps")) ||
+      (vHosp.includes("newham") && sel.includes("newham")) ||
+      (vHosp.includes("royal") && sel.includes("royal"))
+    );
+  };
+
+  const siteVouchers = Array.isArray(vouchersDatabase)
+    ? vouchersDatabase.filter(matchesSelectedHospital)
+    : [];
+
+  const buildRedResult = (preferredExpiryIso?: string, preferredFromIso?: string): VoucherBatchBadgeResult => {
+    let resolvedExpiryIso = preferredExpiryIso || "";
+    if (!resolvedExpiryIso && siteVouchers.length > 0) {
+      let latestFrom = "";
+      for (const v of siteVouchers) {
+        const expIso = getVoucherValidToISO(v) || (getVoucherValidFromISO(v) ? addDaysISO(getVoucherValidFromISO(v), 6) : "");
+        if (expIso && /^\d{4}-\d{2}-\d{2}$/.test(expIso) && (!resolvedExpiryIso || expIso > resolvedExpiryIso)) {
+          resolvedExpiryIso = expIso;
+        }
+        const fromIso = getVoucherValidFromISO(v);
+        if (fromIso && /^\d{4}-\d{2}-\d{2}$/.test(fromIso) && (!latestFrom || fromIso > latestFrom)) {
+          latestFrom = fromIso;
+        }
+      }
+      if (!resolvedExpiryIso && latestFrom) {
+        resolvedExpiryIso = addDaysISO(latestFrom, 6);
+      }
+    }
+
+    const coverToUK = resolvedExpiryIso ? formatDateUK(resolvedExpiryIso) : "";
+    const coverToDDMM = coverToUK.length >= 5 ? coverToUK.substring(0, 5) : "--/--";
+    const formattedRef = preferredFromIso && /^\d{4}-\d{2}-\d{2}$/.test(preferredFromIso)
+      ? `${preferredFromIso.split("-")[2]}/${preferredFromIso.split("-")[1]}/${preferredFromIso.split("-")[0]}`
+      : (coverToUK || undefined);
+
+    return {
+      type: "red",
+      icon: "▲",
+      text: "No Active Codes Available — Add New Batch",
+      className: "text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-800/60",
+      maxExpiryIso: resolvedExpiryIso || undefined,
+      formattedDate: formattedRef,
+      daysDiff: 0,
+      coverToText: `Cover to ${coverToDDMM} · 0d`,
+      coverToFormatted: coverToUK || undefined,
+      coverDaysRemaining: 0
+    };
   };
 
   if (!vouchersDatabase || vouchersDatabase.length === 0) {
-    return redResult;
+    return buildRedResult();
   }
 
   const availableVouchersForSite = vouchersDatabase.filter(v => {
@@ -670,34 +730,19 @@ export function computeVoucherBatchExpiryBadge(params: {
       return false;
     }
 
-    if (selectedHospital && selectedHospital !== "ALL") {
-      const vHosp = String(
-        v.hospital || 
-        v.site || 
-        (v as any).hospitalSite || 
-        (v as any).hospital_site || 
-        (v as any).location || 
-        ""
-      ).trim().toLowerCase();
-
-      if (vHosp) {
-        const sel = selectedHospital.toLowerCase().trim();
-        const isMatch = vHosp === sel ||
-          (vHosp.includes("whipps") && sel.includes("whipps")) ||
-          (vHosp.includes("newham") && sel.includes("newham")) ||
-          (vHosp.includes("royal") && sel.includes("royal"));
-        if (!isMatch) return false;
-      }
+    if (!matchesSelectedHospital(v)) {
+      return false;
     }
 
     return true;
   });
 
   if (availableVouchersForSite.length === 0) {
-    return redResult;
+    return buildRedResult();
   }
 
   let targetValidFromIso = "";
+  let batchExpiryIso = "";
   for (const v of availableVouchersForSite) {
     const fromIso = getVoucherValidFromISO(v);
     if (fromIso && /^\d{4}-\d{2}-\d{2}$/.test(fromIso)) {
@@ -705,27 +750,20 @@ export function computeVoucherBatchExpiryBadge(params: {
         targetValidFromIso = fromIso;
       }
     }
-  }
-
-  if (!targetValidFromIso) {
-    return redResult;
-  }
-
-  let batchExpiryIso = "";
-  for (const v of availableVouchersForSite) {
-    const fromIso = getVoucherValidFromISO(v);
-    if (fromIso === targetValidFromIso) {
-      const expIso = getVoucherValidToISO(v);
-      if (expIso && /^\d{4}-\d{2}-\d{2}$/.test(expIso)) {
-        if (!batchExpiryIso || expIso > batchExpiryIso) {
-          batchExpiryIso = expIso;
-        }
+    const expIso = getVoucherValidToISO(v) || (fromIso ? addDaysISO(fromIso, 6) : "");
+    if (expIso && /^\d{4}-\d{2}-\d{2}$/.test(expIso)) {
+      if (!batchExpiryIso || expIso > batchExpiryIso) {
+        batchExpiryIso = expIso;
       }
     }
   }
 
   if (!batchExpiryIso && targetValidFromIso) {
     batchExpiryIso = addDaysISO(targetValidFromIso, 6);
+  }
+
+  if (!batchExpiryIso) {
+    return buildRedResult();
   }
 
   let today = referenceDate ? new Date(referenceDate) : new Date();
@@ -740,82 +778,57 @@ export function computeVoucherBatchExpiryBadge(params: {
   }
   today.setHours(0, 0, 0, 0);
 
-  let validFromDate: Date;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(targetValidFromIso)) {
-    const [vy, vm, vd] = targetValidFromIso.split("-").map(Number);
-    validFromDate = new Date(vy, vm - 1, vd);
+  let batchExpiryDate: Date;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(batchExpiryIso)) {
+    const [ey, em, ed] = batchExpiryIso.split("-").map(Number);
+    batchExpiryDate = new Date(ey, em - 1, ed);
   } else {
-    validFromDate = new Date(targetValidFromIso);
+    batchExpiryDate = new Date(batchExpiryIso);
   }
-  validFromDate.setHours(0, 0, 0, 0);
+  batchExpiryDate.setHours(0, 0, 0, 0);
 
-  const daysLeft = Math.round((validFromDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  const daysLeft = Math.round((batchExpiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 
-  let batchExpiryDate: Date | null = null;
-  if (batchExpiryIso) {
-    if (/^\d{4}-\d{2}-\d{2}$/.test(batchExpiryIso)) {
-      const [ey, em, ed] = batchExpiryIso.split("-").map(Number);
-      batchExpiryDate = new Date(ey, em - 1, ed);
-    } else {
-      batchExpiryDate = new Date(batchExpiryIso);
-    }
-    batchExpiryDate.setHours(0, 0, 0, 0);
-  }
-
-  if (batchExpiryDate && batchExpiryDate.getTime() < today.getTime()) {
-    return redResult;
-  }
   if (daysLeft <= 0) {
-    return redResult;
+    return buildRedResult(batchExpiryIso, targetValidFromIso || batchExpiryIso);
   }
 
-  const parts = targetValidFromIso.split("-");
-  const formattedDate = parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : targetValidFromIso;
-
-  const coverToIso = batchExpiryIso || addDaysISO(targetValidFromIso, 6);
-  const coverToUK = formatDateUK(coverToIso);
+  const coverToUK = formatDateUK(batchExpiryIso);
   const coverToDDMM = coverToUK.length >= 5 ? coverToUK.substring(0, 5) : coverToUK;
+  const formattedDate = coverToUK;
 
   const textLabel = `Cover to ${coverToDDMM} · ${daysLeft}d`;
 
-  // Red (<= 3 days remaining)
-  if (daysLeft <= 3) {
-    return {
-      type: "red",
-      icon: "▲",
-      text: textLabel,
-      className: "text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-800/60",
-      targetValidFromIso,
-      maxExpiryIso: batchExpiryIso,
-      formattedDate,
-      daysDiff: daysLeft
-    };
-  }
-
-  // Amber (4 to 7 days remaining)
+  // Amber/warning (1 to 7 calendar days remaining until furthest voucher expiry)
   if (daysLeft <= 7) {
     return {
       type: "amber",
       icon: "▲",
       text: textLabel,
       className: "text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800/60",
-      targetValidFromIso,
+      targetValidFromIso: targetValidFromIso || undefined,
       maxExpiryIso: batchExpiryIso,
       formattedDate,
-      daysDiff: daysLeft
+      daysDiff: daysLeft,
+      coverToText: textLabel,
+      coverToFormatted: coverToUK,
+      coverDaysRemaining: daysLeft
     };
   }
 
-  // Green (> 7 days remaining)
+  // Green (> 7 calendar days remaining)
   return {
     type: "green",
     icon: "●",
     text: textLabel,
     className: "text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800/60",
-    targetValidFromIso,
+    targetValidFromIso: targetValidFromIso || undefined,
     maxExpiryIso: batchExpiryIso,
     formattedDate,
-    daysDiff: daysLeft
+    daysDiff: daysLeft,
+    coverToText: textLabel,
+    coverToFormatted: coverToUK,
+    coverDaysRemaining: daysLeft
   };
 }
 

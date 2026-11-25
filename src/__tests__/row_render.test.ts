@@ -562,4 +562,138 @@ describe('DispatchCentre Row Render & Replacement Lock Test Suite (row_render.te
     container.remove();
   });
 
+  it('Scenario G: Top-right header renders a single clean coverage pill without a duplicate warning badge', async () => {
+    setupJsdom();
+    const React = await import('react');
+    const ReactDOMClient = await import('react-dom/client');
+    const { act } = await import('react');
+    const { DispatchCentre } = await import('../components/DispatchCentre');
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = ReactDOMClient.createRoot(container);
+
+    // 1) Active future codes -> single green pill (● Cover to DD/MM · Xd)
+    await act(async () => {
+      root.render(
+        React.createElement(DispatchCentre, {
+          database: [permitBase],
+          vouchersDatabase: [
+            {
+              code: 'ACTIVE_FUTURE_1',
+              hospital: 'Whipps Cross Hospital',
+              validFrom: '2099-12-19',
+              validTo: '2099-12-25',
+              status: 'active',
+              isUsed: false
+            }
+          ],
+          dispatchedKeys: [],
+          unsentKeys: [],
+          dateRangeFilter: 'all',
+          processingDate: '2026-11-04',
+          onSelectRecord: () => {}
+        })
+      );
+    });
+
+    let coverBadge = container.querySelector('[data-testid="voucher-cover-badge"]');
+    let warningBadge = container.querySelector('[data-testid="voucher-batch-warning-badge"]');
+    assert.ok(coverBadge, 'Scenario G: Single coverage badge must render for active codes');
+    assert.ok(coverBadge.textContent?.includes('●') && coverBadge.textContent?.includes('Cover to 25/12 ·'), `Expected green Cover to 25/12 pill, got: ${coverBadge.textContent}`);
+    assert.equal(warningBadge, null, 'Scenario G: No duplicate warning pill should render');
+
+    // 1b) Active batch expiring 6 calendar days from today (e.g. 24/11 -> 30/11) -> single amber pill (▲ Cover to DD/MM · 6d)
+    const todayLocal = new Date();
+    todayLocal.setHours(0, 0, 0, 0);
+    const sixDaysOut = new Date(todayLocal.getTime() + 6 * 86400000);
+    const pad2 = (n: number) => String(n).padStart(2, '0');
+    const todayIsoLocal = `${todayLocal.getFullYear()}-${pad2(todayLocal.getMonth() + 1)}-${pad2(todayLocal.getDate())}`;
+    const sixOutIso = `${sixDaysOut.getFullYear()}-${pad2(sixDaysOut.getMonth() + 1)}-${pad2(sixDaysOut.getDate())}`;
+    const sixOutDDMM = `${pad2(sixDaysOut.getDate())}/${pad2(sixDaysOut.getMonth() + 1)}`;
+
+    await act(async () => {
+      root.render(
+        React.createElement(DispatchCentre, {
+          database: [permitBase],
+          vouchersDatabase: [
+            {
+              code: 'ACTIVE_6D',
+              hospital: 'Whipps Cross Hospital',
+              validFrom: todayIsoLocal,
+              validTo: sixOutIso,
+              status: 'active',
+              isUsed: false
+            }
+          ],
+          dispatchedKeys: [],
+          unsentKeys: [],
+          dateRangeFilter: 'all',
+          processingDate: todayIsoLocal,
+          onSelectRecord: () => {}
+        })
+      );
+    });
+
+    coverBadge = container.querySelector('[data-testid="voucher-cover-badge"]');
+    assert.ok(coverBadge, 'Scenario G: Amber 6d coverage badge must render');
+    assert.ok(coverBadge.textContent?.includes('▲') && coverBadge.textContent?.includes(`Cover to ${sixOutDDMM} · 6d`), `Expected ▲ Cover to ${sixOutDDMM} · 6d, got: ${coverBadge.textContent}`);
+    assert.ok(coverBadge.className.includes('text-amber-800'), 'Scenario G: 6d <= 7d state must use amber warning styling');
+
+    // 2) All codes used/exhausted in a batch covering up to 2099-12-25 -> single red pill (▲ Cover to 25/12 · 0d)
+    await act(async () => {
+      root.render(
+        React.createElement(DispatchCentre, {
+          database: [permitBase],
+          vouchersDatabase: [
+            {
+              code: 'USED_ONLY_1',
+              hospital: 'Whipps Cross Hospital',
+              validFrom: '2099-12-19',
+              validTo: '2099-12-25',
+              status: 'used',
+              isUsed: true
+            }
+          ],
+          dispatchedKeys: [],
+          unsentKeys: [],
+          dateRangeFilter: 'all',
+          processingDate: '2026-11-04',
+          onSelectRecord: () => {}
+        })
+      );
+    });
+
+    coverBadge = container.querySelector('[data-testid="voucher-cover-badge"]');
+    warningBadge = container.querySelector('[data-testid="voucher-batch-warning-badge"]');
+    assert.ok(coverBadge, 'Scenario G: Single coverage badge must remain visible when all active codes are used');
+    assert.ok(coverBadge.textContent?.includes('▲') && coverBadge.textContent?.includes('Cover to 25/12 · 0d'), `Expected ▲ Cover to 25/12 · 0d, got: ${coverBadge.textContent}`);
+    assert.ok(coverBadge.className.includes('text-red-700'), 'Scenario G: Exhausted state must style pill red');
+    assert.equal(warningBadge, null, 'Scenario G: Duplicate second warning pill must not render');
+
+    // 3) Completely empty vouchersDatabase -> single red pill (▲ Cover to --/-- · 0d)
+    await act(async () => {
+      root.render(
+        React.createElement(DispatchCentre, {
+          database: [permitBase],
+          vouchersDatabase: [],
+          dispatchedKeys: [],
+          unsentKeys: [],
+          dateRangeFilter: 'all',
+          processingDate: '2026-11-04',
+          onSelectRecord: () => {}
+        })
+      );
+    });
+
+    coverBadge = container.querySelector('[data-testid="voucher-cover-badge"]');
+    warningBadge = container.querySelector('[data-testid="voucher-batch-warning-badge"]');
+    assert.ok(coverBadge, 'Scenario G: Single coverage badge must remain visible when vouchersDatabase is empty');
+    assert.ok(coverBadge.textContent?.includes('▲') && coverBadge.textContent?.includes('Cover to --/-- · 0d'), `Expected ▲ Cover to --/-- · 0d, got: ${coverBadge.textContent}`);
+    assert.equal(warningBadge, null, 'Scenario G: Duplicate second warning pill must not render when empty');
+
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
 });
