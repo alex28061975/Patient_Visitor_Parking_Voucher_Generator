@@ -1672,10 +1672,10 @@ function DispatchCentreComponent({
               const coverTitle = isNoActiveCodes
                 ? (
                     voucherBatchBadge.coverToFormatted
-                      ? `No active codes available — furthest voucher coverage to ${voucherBatchBadge.coverToFormatted} (${coverDays} days remaining)`
+                      ? `No active codes available — furthest voucher validFrom ${voucherBatchBadge.coverToFormatted} (${coverDays} days ahead)`
                       : `No active codes available — add new batch`
                   )
-                : `Vouchers cover permits up to ${voucherBatchBadge.coverToFormatted || voucherBatchBadge.formattedDate || ""} (${coverDays} days remaining)`;
+                : `Vouchers are loaded for permits starting up to ${voucherBatchBadge.coverToFormatted || voucherBatchBadge.formattedDate || ""} (${coverDays} days ahead)`;
 
               return (
                 <span

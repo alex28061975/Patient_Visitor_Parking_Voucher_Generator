@@ -600,16 +600,18 @@ describe('DispatchCentre Row Render & Replacement Lock Test Suite (row_render.te
     let coverBadge = container.querySelector('[data-testid="voucher-cover-badge"]');
     let warningBadge = container.querySelector('[data-testid="voucher-batch-warning-badge"]');
     assert.ok(coverBadge, 'Scenario G: Single coverage badge must render for active codes');
-    assert.ok(coverBadge.textContent?.includes('●') && coverBadge.textContent?.includes('Cover to 25/12 ·'), `Expected green Cover to 25/12 pill, got: ${coverBadge.textContent}`);
+    assert.ok(coverBadge.textContent?.includes('●') && coverBadge.textContent?.includes('Cover to 19/12 ·'), `Expected green Cover to 19/12 pill, got: ${coverBadge.textContent}`);
     assert.equal(warningBadge, null, 'Scenario G: No duplicate warning pill should render');
 
-    // 1b) Active batch expiring 6 calendar days from today (e.g. 24/11 -> 30/11) -> single amber pill (▲ Cover to DD/MM · 6d)
+    // 1b) Active batch with validFrom 6 calendar days from today -> single amber pill (▲ Cover to DD/MM · 6d)
     const todayLocal = new Date();
     todayLocal.setHours(0, 0, 0, 0);
     const sixDaysOut = new Date(todayLocal.getTime() + 6 * 86400000);
+    const twelveDaysOut = new Date(todayLocal.getTime() + 12 * 86400000);
     const pad2 = (n: number) => String(n).padStart(2, '0');
     const todayIsoLocal = `${todayLocal.getFullYear()}-${pad2(todayLocal.getMonth() + 1)}-${pad2(todayLocal.getDate())}`;
     const sixOutIso = `${sixDaysOut.getFullYear()}-${pad2(sixDaysOut.getMonth() + 1)}-${pad2(sixDaysOut.getDate())}`;
+    const twelveOutIso = `${twelveDaysOut.getFullYear()}-${pad2(twelveDaysOut.getMonth() + 1)}-${pad2(twelveDaysOut.getDate())}`;
     const sixOutDDMM = `${pad2(sixDaysOut.getDate())}/${pad2(sixDaysOut.getMonth() + 1)}`;
 
     await act(async () => {
@@ -620,8 +622,8 @@ describe('DispatchCentre Row Render & Replacement Lock Test Suite (row_render.te
             {
               code: 'ACTIVE_6D',
               hospital: 'Whipps Cross Hospital',
-              validFrom: todayIsoLocal,
-              validTo: sixOutIso,
+              validFrom: sixOutIso,
+              validTo: twelveOutIso,
               status: 'active',
               isUsed: false
             }
@@ -640,7 +642,7 @@ describe('DispatchCentre Row Render & Replacement Lock Test Suite (row_render.te
     assert.ok(coverBadge.textContent?.includes('▲') && coverBadge.textContent?.includes(`Cover to ${sixOutDDMM} · 6d`), `Expected ▲ Cover to ${sixOutDDMM} · 6d, got: ${coverBadge.textContent}`);
     assert.ok(coverBadge.className.includes('text-amber-800'), 'Scenario G: 6d <= 7d state must use amber warning styling');
 
-    // 2) All codes used/exhausted in a batch covering up to 2099-12-25 -> single red pill (▲ Cover to 25/12 · 0d)
+    // 2) All codes used/exhausted in a batch starting 2099-12-19 -> single red pill (▲ Cover to 19/12 · 0d)
     await act(async () => {
       root.render(
         React.createElement(DispatchCentre, {
@@ -667,7 +669,7 @@ describe('DispatchCentre Row Render & Replacement Lock Test Suite (row_render.te
     coverBadge = container.querySelector('[data-testid="voucher-cover-badge"]');
     warningBadge = container.querySelector('[data-testid="voucher-batch-warning-badge"]');
     assert.ok(coverBadge, 'Scenario G: Single coverage badge must remain visible when all active codes are used');
-    assert.ok(coverBadge.textContent?.includes('▲') && coverBadge.textContent?.includes('Cover to 25/12 · 0d'), `Expected ▲ Cover to 25/12 · 0d, got: ${coverBadge.textContent}`);
+    assert.ok(coverBadge.textContent?.includes('▲') && coverBadge.textContent?.includes('Cover to 19/12 · 0d'), `Expected ▲ Cover to 19/12 · 0d, got: ${coverBadge.textContent}`);
     assert.ok(coverBadge.className.includes('text-red-700'), 'Scenario G: Exhausted state must style pill red');
     assert.equal(warningBadge, null, 'Scenario G: Duplicate second warning pill must not render');
 

@@ -957,42 +957,42 @@ Barts Health NHS Trust`;
   });
 
   // =========================================================================
-  // TEST 21 — Voucher inventory validity calculation with color thresholds:
-  // - Green (> 7 calendar days until furthest voucher expiry): "● Cover to DD/MM · Nd"
-  // - Amber (1 to 7 calendar days until furthest voucher expiry): "▲ Cover to DD/MM · Nd"
-  // - Red (<= 0 days, expired, or no active codes): "▲ Cover to DD/MM · 0d"
+  // TEST 21 — Voucher inventory validity calculation using furthest available validFrom date:
+  // - Green (> 7 calendar days ahead from startOfToday to furthest validFrom): "● Cover to DD/MM · Nd"
+  // - Amber (1 to 7 calendar days ahead to furthest validFrom): "▲ Cover to DD/MM · Nd"
+  // - Red (<= 0 days, expired, or no available vouchers): "▲ Cover to DD/MM · 0d"
   // =========================================================================
-  it('TEST 21: Voucher inventory validity calculation with calendar-day thresholds (Green > 7d, Amber 1-7d, Red <= 0d)', () => {
-    // 1. User example: today is 24/11/2026, active batch valid 24/11 to 30/11 -> 6 calendar days remaining (Amber)
-    const vouchersSixDays: ParsedVoucherData[] = [
-      { code: 'V_NOV_30', validFrom: '2026-11-24', validTo: '2026-11-30', status: 'active', isUsed: false }
+  it('TEST 21: Voucher inventory validity calculation uses furthest unallocated validFrom date (Green > 7d, Amber 1-7d, Red <= 0d)', () => {
+    // 1. Today is 25/11/2026, active voucher validFrom is 30/11/2026 (validTo 06/12/2026) -> 5 calendar days ahead (Amber)
+    const vouchersFiveDays: ParsedVoucherData[] = [
+      { code: 'V_NOV_30', validFrom: '2026-11-30', validTo: '2026-12-06', status: 'active', isUsed: false }
     ];
-    const badgeSixDays = computeVoucherBatchExpiryBadge({
-      vouchersDatabase: vouchersSixDays,
-      todayDateIso: '2026-11-24'
+    const badgeFiveDays = computeVoucherBatchExpiryBadge({
+      vouchersDatabase: vouchersFiveDays,
+      todayDateIso: '2026-11-25'
     });
-    assert.equal(badgeSixDays.type, 'amber');
-    assert.equal(badgeSixDays.icon, '▲');
-    assert.equal(badgeSixDays.daysDiff, 6);
-    assert.equal(badgeSixDays.coverDaysRemaining, 6);
-    assert.equal(badgeSixDays.text, 'Cover to 30/11 · 6d');
-    assert.equal(badgeSixDays.coverToText, 'Cover to 30/11 · 6d');
+    assert.equal(badgeFiveDays.type, 'amber');
+    assert.equal(badgeFiveDays.icon, '▲');
+    assert.equal(badgeFiveDays.daysDiff, 5);
+    assert.equal(badgeFiveDays.coverDaysRemaining, 5);
+    assert.equal(badgeFiveDays.text, 'Cover to 30/11 · 5d');
+    assert.equal(badgeFiveDays.coverToText, 'Cover to 30/11 · 5d');
 
     // Also verify referenceDate directly
-    const refToday = new Date(2026, 10, 24); // 24/11/2026
+    const refToday = new Date(2026, 10, 25); // 25/11/2026
     refToday.setHours(0, 0, 0, 0);
     const badgeWithRef = computeVoucherBatchExpiryBadge({
-      vouchersDatabase: vouchersSixDays,
+      vouchersDatabase: vouchersFiveDays,
       referenceDate: refToday
     });
     assert.equal(badgeWithRef.type, 'amber');
     assert.equal(badgeWithRef.icon, '▲');
-    assert.equal(badgeWithRef.daysDiff, 6);
-    assert.equal(badgeWithRef.text, 'Cover to 30/11 · 6d');
+    assert.equal(badgeWithRef.daysDiff, 5);
+    assert.equal(badgeWithRef.text, 'Cover to 30/11 · 5d');
 
-    // 2. 1 calendar day remaining until expiry -> Amber
+    // 2. 1 calendar day ahead until validFrom -> Amber
     const vouchersOneDay: ParsedVoucherData[] = [
-      { code: 'V_ONE_DAY', validFrom: '2026-09-23', validTo: '2026-09-29', status: 'active', isUsed: false }
+      { code: 'V_ONE_DAY', validFrom: '2026-09-29', validTo: '2026-10-05', status: 'active', isUsed: false }
     ];
     const badgeOneDay = computeVoucherBatchExpiryBadge({
       vouchersDatabase: vouchersOneDay,
@@ -1003,9 +1003,9 @@ Barts Health NHS Trust`;
     assert.equal(badgeOneDay.daysDiff, 1);
     assert.equal(badgeOneDay.text, 'Cover to 29/09 · 1d');
 
-    // 3. 7 calendar days remaining until expiry -> Amber boundary
+    // 3. 7 calendar days ahead until validFrom -> Amber boundary
     const vouchersSevenDays: ParsedVoucherData[] = [
-      { code: 'V_SEVEN', validFrom: '2026-09-28', validTo: '2026-10-05', status: 'active', isUsed: false }
+      { code: 'V_SEVEN', validFrom: '2026-10-05', validTo: '2026-10-11', status: 'active', isUsed: false }
     ];
     const badgeSevenDays = computeVoucherBatchExpiryBadge({
       vouchersDatabase: vouchersSevenDays,
@@ -1016,9 +1016,9 @@ Barts Health NHS Trust`;
     assert.equal(badgeSevenDays.daysDiff, 7);
     assert.equal(badgeSevenDays.text, 'Cover to 05/10 · 7d');
 
-    // 4. 8 calendar days remaining until expiry -> Green boundary
+    // 4. 8 calendar days ahead until validFrom -> Green boundary
     const vouchersEightDays: ParsedVoucherData[] = [
-      { code: 'V_EIGHT', validFrom: '2026-09-30', validTo: '2026-10-06', status: 'active', isUsed: false }
+      { code: 'V_EIGHT', validFrom: '2026-10-06', validTo: '2026-10-12', status: 'active', isUsed: false }
     ];
     const badgeEightDays = computeVoucherBatchExpiryBadge({
       vouchersDatabase: vouchersEightDays,
@@ -1029,9 +1029,23 @@ Barts Health NHS Trust`;
     assert.equal(badgeEightDays.daysDiff, 8);
     assert.equal(badgeEightDays.text, 'Cover to 06/10 · 8d');
 
-    // 5. Red badge: 0 calendar days remaining (validTo is today)
+    // 5. Ignores already dispatched/assigned vouchers when finding furthest available validFrom
+    const vouchersMixedDispatched: ParsedVoucherData[] = [
+      { code: 'DISP_FAR', validFrom: '2026-12-10', validTo: '2026-12-16', status: 'active', isUsed: false },
+      { code: 'AVAIL_NEAR', validFrom: '2026-11-28', validTo: '2026-12-04', status: 'active', isUsed: false }
+    ];
+    const badgeIgnoresDispatched = computeVoucherBatchExpiryBadge({
+      vouchersDatabase: vouchersMixedDispatched,
+      assignedVoucherCodesSet: new Set(['DISP_FAR']),
+      todayDateIso: '2026-11-25'
+    });
+    assert.equal(badgeIgnoresDispatched.type, 'amber');
+    assert.equal(badgeIgnoresDispatched.daysDiff, 3);
+    assert.equal(badgeIgnoresDispatched.text, 'Cover to 28/11 · 3d');
+
+    // 6. Red badge: 0 calendar days ahead (validFrom is today)
     const vouchersZeroDays: ParsedVoucherData[] = [
-      { code: 'V_EXPIRES_TODAY', validFrom: '2026-09-22', validTo: '2026-09-28', status: 'active', isUsed: false }
+      { code: 'V_TODAY', validFrom: '2026-09-28', validTo: '2026-10-04', status: 'active', isUsed: false }
     ];
     const badgeZeroDays = computeVoucherBatchExpiryBadge({
       vouchersDatabase: vouchersZeroDays,
@@ -1043,7 +1057,7 @@ Barts Health NHS Trust`;
     assert.equal(badgeZeroDays.coverToText, 'Cover to 28/09 · 0d');
     assert.equal(badgeZeroDays.coverDaysRemaining, 0);
 
-    // 6. Red badge: available vouchers expired in the past
+    // 7. Red badge: available vouchers expired in the past
     const vouchersExpired: ParsedVoucherData[] = [
       { code: 'V_EXPIRED', validFrom: '2026-09-10', validTo: '2026-09-17', status: 'active', isUsed: false }
     ];
@@ -1054,10 +1068,10 @@ Barts Health NHS Trust`;
     assert.equal(badgeExpired.type, 'red');
     assert.equal(badgeExpired.icon, '▲');
     assert.equal(badgeExpired.text, 'No Active Codes Available — Add New Batch');
-    assert.equal(badgeExpired.coverToText, 'Cover to 17/09 · 0d');
+    assert.equal(badgeExpired.coverToText, 'Cover to 10/09 · 0d');
     assert.equal(badgeExpired.coverDaysRemaining, 0);
 
-    // 7. Red badge: 0 active/available vouchers remain (empty database)
+    // 8. Red badge: 0 active/available vouchers remain (empty database)
     const badgeEmpty = computeVoucherBatchExpiryBadge({
       vouchersDatabase: [],
       todayDateIso: '2026-09-28'
@@ -1068,10 +1082,10 @@ Barts Health NHS Trust`;
     assert.equal(badgeEmpty.coverToText, 'Cover to --/-- · 0d');
     assert.equal(badgeEmpty.coverDaysRemaining, 0);
 
-    // 8. Red badge: all vouchers are already assigned/used
+    // 9. Red badge: all vouchers are already assigned/used
     const vouchersAllUsed: ParsedVoucherData[] = [
-      { code: 'USED_1', validTo: '2026-10-10', status: 'used', isUsed: true },
-      { code: 'ASSIGNED_1', validTo: '2026-10-10', status: 'active', isUsed: false }
+      { code: 'USED_1', validFrom: '2026-10-04', validTo: '2026-10-10', status: 'used', isUsed: true },
+      { code: 'ASSIGNED_1', validFrom: '2026-10-04', validTo: '2026-10-10', status: 'active', isUsed: false }
     ];
     const badgeAllUsed = computeVoucherBatchExpiryBadge({
       vouchersDatabase: vouchersAllUsed,
@@ -1081,13 +1095,13 @@ Barts Health NHS Trust`;
     assert.equal(badgeAllUsed.type, 'red');
     assert.equal(badgeAllUsed.icon, '▲');
     assert.equal(badgeAllUsed.text, 'No Active Codes Available — Add New Batch');
-    assert.equal(badgeAllUsed.coverToText, 'Cover to 10/10 · 0d');
+    assert.equal(badgeAllUsed.coverToText, 'Cover to 04/10 · 0d');
     assert.equal(badgeAllUsed.coverDaysRemaining, 0);
 
-    // 9. Hospital/site filtering: respects selected hospital inventory
+    // 10. Hospital/site filtering: respects selected hospital inventory
     const vouchersHospital: ParsedVoucherData[] = [
-      { code: 'WHIPPS_CODE', hospital: 'Whipps Cross Hospital', validFrom: '2026-10-05', validTo: '2026-10-12', status: 'active', isUsed: false },
-      { code: 'NEWHAM_CODE', hospital: 'Newham Hospital', validFrom: '2026-09-27', validTo: '2026-10-03', status: 'active', isUsed: false }
+      { code: 'WHIPPS_CODE', hospital: 'Whipps Cross Hospital', validFrom: '2026-10-08', validTo: '2026-10-14', status: 'active', isUsed: false },
+      { code: 'NEWHAM_CODE', hospital: 'Newham Hospital', validFrom: '2026-10-03', validTo: '2026-10-09', status: 'active', isUsed: false }
     ];
     const badgeWhipps = computeVoucherBatchExpiryBadge({
       vouchersDatabase: vouchersHospital,
@@ -1096,8 +1110,8 @@ Barts Health NHS Trust`;
     });
     assert.equal(badgeWhipps.type, 'green');
     assert.equal(badgeWhipps.icon, '●');
-    assert.equal(badgeWhipps.daysDiff, 14);
-    assert.equal(badgeWhipps.text, 'Cover to 12/10 · 14d');
+    assert.equal(badgeWhipps.daysDiff, 10);
+    assert.equal(badgeWhipps.text, 'Cover to 08/10 · 10d');
 
     const badgeNewham = computeVoucherBatchExpiryBadge({
       vouchersDatabase: vouchersHospital,
