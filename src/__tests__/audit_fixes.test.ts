@@ -1040,4 +1040,48 @@ describe('Third Audit Corrective Fixes Suite', () => {
       await schemaMissingSrv.close();
     }
   });
+
+  it('1g. Vercel serverless entry point api/index.ts and vercel.json route all /api/* endpoints without 404', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+
+    const vercelConfigPath = path.join(process.cwd(), 'vercel.json');
+    assert.equal(fs.existsSync(vercelConfigPath), true, 'vercel.json must exist at project root');
+    const vercelConfig = JSON.parse(fs.readFileSync(vercelConfigPath, 'utf8'));
+    assert.equal(Array.isArray(vercelConfig.rewrites), true, 'vercel.json must define rewrites');
+    assert.deepEqual(vercelConfig.rewrites[0], {
+      source: '/api/(.*)',
+      destination: '/api/index.ts'
+    });
+    assert.equal(
+      vercelConfig.rewrites.some((r: any) => r.destination === '/index.html'),
+      true,
+      'vercel.json must include SPA fallback to /index.html'
+    );
+
+    process.env.SKIP_SERVER_LISTEN = '1';
+    const vercelEntry = await import('../../api/index');
+    const handler = vercelEntry.default;
+    assert.equal(typeof handler, 'function', 'api/index.ts must default-export the Express app handler');
+
+    const srv = http.createServer(handler);
+    await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve));
+    const { port } = srv.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${port}`;
+    try {
+      const healthRes = await fetch(`${baseUrl}/api/health`);
+      assert.equal(healthRes.status, 200);
+
+      const cfgRes = await fetch(`${baseUrl}/api/config`);
+      assert.equal(cfgRes.status, 200);
+
+      for (const apiPath of ['/api/dispatched', '/api/permits', '/api/vouchers', '/api/blocklist', '/api/emails/statuses']) {
+        const res = await fetch(`${baseUrl}${apiPath}`);
+        assert.notEqual(res.status, 404, `Vercel serverless Express handler must resolve ${apiPath} without 404`);
+      }
+    } finally {
+      await new Promise<void>((resolve) => srv.close(() => resolve()));
+    }
+  });
 });
+

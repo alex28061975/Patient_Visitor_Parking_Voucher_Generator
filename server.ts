@@ -1,7 +1,6 @@
 import express from "express";
 import path from "path";
 import crypto from "crypto";
-import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
@@ -1386,12 +1385,15 @@ export function createApiApp(options: CreateAppOptions = {}) {
   return app;
 }
 
+export const app = createApiApp();
+export default app;
+
 async function startServer() {
-  const app = createApiApp();
   const PORT = 3000;
 
   // Vite integration middleware
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa"
@@ -1410,6 +1412,6 @@ async function startServer() {
   });
 }
 
-if (process.env.SKIP_SERVER_LISTEN !== "1") {
+if (!process.env.VERCEL && process.env.SKIP_SERVER_LISTEN !== "1") {
   startServer();
 }
