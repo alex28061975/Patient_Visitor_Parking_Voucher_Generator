@@ -1911,11 +1911,13 @@ function DispatchCentreComponent({
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-2.5 ml-auto xl:ml-0 whitespace-nowrap shrink-0">
-            <button
-              type="button"
+            <span
+              role="button"
+              tabIndex={0}
               onClick={handleCycleAvgPeriod}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleCycleAvgPeriod(); } }}
               title={`Average codes used per day over the last ${avgPeriodDays} days. Cancelled permits excluded. Click to change period.`}
-              className={`${HEADER_BOX} hover:border-[#1A73E8] dark:hover:border-[#1A73E8] hover:ring-2 hover:ring-[#1A73E8]/20 active:translate-y-[1px] transition cursor-pointer shrink-0`}
+              className={`${HEADER_BOX} hover:border-[#1A73E8] dark:hover:border-[#1A73E8] hover:ring-2 hover:ring-[#1A73E8]/20 active:translate-y-[1px] transition cursor-pointer shrink-0 select-none`}
             >
               <TrendingUp size={14} className="text-[#1A73E8] shrink-0" />
               <span>Avg/day</span>
@@ -1925,7 +1927,7 @@ function DispatchCentreComponent({
               <span className="text-[10px] leading-none px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300">
                 {avgPeriodDays}d
               </span>
-            </button>
+            </span>
 
             <span
               className={HEADER_BOX}

@@ -269,9 +269,12 @@ describe('Avg/day voucher usage calculation', () => {
       );
     });
 
-    const buttons = Array.from(container.querySelectorAll('button'));
+    const buttons = Array.from(container.querySelectorAll('[role="button"]'));
     const avgBtn = buttons.find(b => b.textContent?.includes('Avg/day'));
     assert.ok(avgBtn, 'Avg/day chip button should render');
+    assert.equal(avgBtn.tagName, 'SPAN');
+    assert.equal(avgBtn.getAttribute('tabindex'), '0');
+    assert.ok(avgBtn.className.includes('select-none'));
     assert.ok(avgBtn.textContent?.includes('1.0'), '7 codes over 7 days should display 1.0');
     assert.ok(avgBtn.textContent?.includes('7d'), 'Default period pill should display 7d');
     assert.equal(
@@ -313,10 +316,17 @@ describe('Avg/day voucher usage calculation', () => {
     assert.equal(store['parkpass_avg_codes_period_days'], '30');
 
     await act(async () => {
-      avgBtn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+      avgBtn.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     });
     assert.ok(avgBtn.textContent?.includes('1.0'));
     assert.ok(avgBtn.textContent?.includes('7d'));
     assert.equal(store['parkpass_avg_codes_period_days'], '7');
+
+    await act(async () => {
+      avgBtn.dispatchEvent(new win.KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    });
+    assert.ok(avgBtn.textContent?.includes('0.5'));
+    assert.ok(avgBtn.textContent?.includes('14d'));
+    assert.equal(store['parkpass_avg_codes_period_days'], '14');
   });
 });

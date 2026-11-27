@@ -242,7 +242,7 @@ describe('Stock runway chip & calculation', () => {
     assert.ok(chip?.textContent?.includes('~10d'), 'Stock runway must not change when table filter changes');
 
     // Cycle Avg/day to 14d => avg becomes 7/14 = 0.5/day => runway becomes Math.floor(10 / 0.5) = 20d -> Green (>= 14)
-    const avgBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes('Avg/day'));
+    const avgBtn = Array.from(container.querySelectorAll('[role="button"]')).find(b => b.textContent?.includes('Avg/day'));
     assert.ok(avgBtn);
     await act(async () => {
       avgBtn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
