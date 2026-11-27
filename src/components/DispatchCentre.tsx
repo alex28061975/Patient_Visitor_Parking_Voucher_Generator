@@ -26,7 +26,8 @@ import {
   FileText,
   Pencil,
   Eye,
-  User
+  User,
+  TrendingUp
 } from "lucide-react";
 import { 
   CsvPermitRecord, 
@@ -58,9 +59,11 @@ import {
   isLikelyDriverName,
   cleanVrm,
   safeParseDateToTimestamp,
-  safeParseDMYToISO
+  safeParseDMYToISO,
+  parseFullDateTimeMs
 } from "../utils/csvParser";
-import { checkIsRecordDispatched, isRecordMatch, isPlaceholderVrm, getRecordPrimaryKey, buildReplacementFormUpdate, getRowState, startQrClipboardWrite, ClipboardWriteSession } from "../utils/dispatchUtils";
+import { checkIsRecordDispatched, isRecordMatch, isPlaceholderVrm, getRecordPrimaryKey, getRecordKeys, buildReplacementFormUpdate, getRowState, startQrClipboardWrite, ClipboardWriteSession } from "../utils/dispatchUtils";
+import { safeLocalStorage } from "../utils/safeLocalStorage";
 import { isVrmSilentBlockedSync } from "../lib/blocklist";
 import { VoucherCodePicker } from "./VoucherCodePicker";
 import {
@@ -132,6 +135,194 @@ const formatDate = (dateStr?: any) => {
   return s;
 };
 
+export type AvgPerDayPeriod = 7 | 14 | 30;
+
+const AVG_PERIOD_STORAGE_KEY = "parkpass_avg_codes_period_days";
+
+const isValidUsedVoucherCode = (raw?: unknown): string => {
+  if (raw === null || raw === undefined) return "";
+  const cleaned = cleanVoucherCodeValue(String(raw)).toUpperCase();
+  if (
+    !cleaned ||
+    cleaned === "-" ||
+    cleaned === "CANCELLED" ||
+    cleaned === "PENDING" ||
+    cleaned === "BLOCKED" ||
+    cleaned === "N/A" ||
+    cleaned === "NA" ||
+    cleaned === "NONE" ||
+    cleaned === "NULL" ||
+    cleaned === "UNDEFINED"
+  ) {
+    return "";
+  }
+  return cleaned;
+};
+
+export function computeAverageCodesPerDay({
+  database,
+  periodDays,
+  dispatchedKeysSet,
+  unsentKeysSet,
+  dispatchDates,
+  customVouchers,
+  processingDate,
+  referenceDate
+}: {
+  database: CsvPermitRecord[];
+  periodDays: AvgPerDayPeriod;
+  dispatchedKeysSet: Set<string>;
+  unsentKeysSet: Set<string>;
+  dispatchDates?: Record<string, string>;
+  customVouchers?: Record<string, string>;
+  processingDate?: string;
+  referenceDate?: Date;
+}): number {
+  if (!database || database.length === 0 || periodDays <= 0) return 0;
+
+  const now = referenceDate ? new Date(referenceDate.getTime()) : new Date();
+  const windowStartMs = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() - (periodDays - 1),
+    0,
+    0,
+    0,
+    0
+  ).getTime();
+  const windowEndMs = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    23,
+    59,
+    59,
+    999
+  ).getTime();
+
+  let totalCodesUsed = 0;
+
+  for (const rec of database) {
+    if (!rec) continue;
+
+    const reqDate = getRequestedPermitDateISO(rec, processingDate);
+    if (
+      rec.isCancelled === true ||
+      (typeof rec.status === "string" && rec.status.trim().toLowerCase().includes("cancel")) ||
+      isRecordCancelled(rec, reqDate, database)
+    ) {
+      continue;
+    }
+
+    const recKeys = getRecordKeys(rec);
+    const isExplicitlyUnsent = unsentKeysSet.size > 0 && recKeys.some((k) => unsentKeysSet.has(k));
+    if (isExplicitlyUnsent) continue;
+
+    const dispatchedByFlag =
+      rec.isDispatched === true ||
+      Boolean(
+        rec.dispatchedAt &&
+          String(rec.dispatchedAt).trim() &&
+          String(rec.dispatchedAt).trim() !== "-" &&
+          String(rec.dispatchedAt).trim().toLowerCase() !== "null" &&
+          String(rec.dispatchedAt).trim().toLowerCase() !== "undefined"
+      ) ||
+      (typeof rec.status === "string" && ["SENT", "DISPATCHED"].includes(rec.status.trim().toUpperCase()));
+
+    const isDispatched =
+      dispatchedByFlag ||
+      checkIsRecordDispatched(rec, rec.vrm, rec.driverName, rec.dateRequired, dispatchedKeysSet, unsentKeysSet);
+    if (!isDispatched) continue;
+
+    const primaryKey = getRecordPrimaryKey(rec);
+    const customCodeRaw = customVouchers
+      ? (primaryKey ? customVouchers[primaryKey] : undefined) ||
+        (rec.formId !== undefined && rec.formId !== null ? customVouchers[String(rec.formId)] : undefined) ||
+        (rec.id !== undefined && rec.id !== null ? customVouchers[String(rec.id)] : undefined)
+      : undefined;
+
+    const primaryCode =
+      isValidUsedVoucherCode(rec.voucherCode) ||
+      isValidUsedVoucherCode(rec.prePaidCode) ||
+      isValidUsedVoucherCode(rec.voucherCodesText) ||
+      isValidUsedVoucherCode(customCodeRaw) ||
+      isValidUsedVoucherCode(rec.qrCode) ||
+      isValidUsedVoucherCode(rec.serialNumber) ||
+      isValidUsedVoucherCode(rec.voucher) ||
+      isValidUsedVoucherCode(rec.code);
+
+    if (!primaryCode) continue;
+
+    const usedCodes = new Set<string>([primaryCode]);
+    const origCode = isValidUsedVoucherCode(rec.originalVoucherCode);
+    if (origCode) usedCodes.add(origCode);
+    const repCode = isValidUsedVoucherCode(rec.replacementCode);
+    if (repCode) usedCodes.add(repCode);
+
+    let eventMs: number | null = null;
+
+    if (rec.dispatchedAt !== undefined && rec.dispatchedAt !== null) {
+      const rawDisp = String(rec.dispatchedAt).trim();
+      if (rawDisp && rawDisp !== "-" && rawDisp.toLowerCase() !== "null" && rawDisp.toLowerCase() !== "undefined") {
+        eventMs = parseFullDateTimeMs(rawDisp);
+      }
+    }
+
+    if ((eventMs === null || eventMs <= 0) && dispatchDates) {
+      for (const k of recKeys) {
+        const dVal = dispatchDates[k];
+        if (dVal && String(dVal).trim() && String(dVal).trim() !== "-") {
+          const parsed = parseFullDateTimeMs(String(dVal).trim());
+          if (parsed !== null && parsed > 0) {
+            eventMs = parsed;
+            break;
+          }
+        }
+      }
+    }
+
+    if (eventMs === null || eventMs <= 0) {
+      const subMs = getRecordSubmittedTimeMs(rec);
+      if (subMs > 0) {
+        eventMs = subMs;
+      }
+    }
+
+    if (eventMs === null || eventMs <= 0) {
+      const fallbackCandidates = [
+        (rec as any).submittedAt,
+        (rec as any).submitted_at,
+        (rec as any).submissionTime,
+        (rec as any).submission_time,
+        rec.submissionDate,
+        (rec as any).submission_date,
+        rec.todayDate,
+        rec.processingDate
+      ];
+      const fallbackDateISO = parseDateToISO(rec.dateRequired || rec.validFrom || rec.todayDate || "") || "";
+      for (const cand of fallbackCandidates) {
+        if (cand !== undefined && cand !== null) {
+          const s = String(cand).trim();
+          if (!s || s === "-" || s.toLowerCase() === "null" || s.toLowerCase() === "undefined") continue;
+          const parsed = parseFullDateTimeMs(s, fallbackDateISO);
+          if (parsed !== null && parsed > 0) {
+            eventMs = parsed;
+            break;
+          }
+        }
+      }
+    }
+
+    if (eventMs === null || isNaN(eventMs) || eventMs < windowStartMs || eventMs > windowEndMs) {
+      continue;
+    }
+
+    totalCodesUsed += usedCodes.size;
+  }
+
+  return totalCodesUsed / periodDays;
+}
+
 export type SortKey = 
   | "id" 
   | "submitted"
@@ -178,6 +369,7 @@ function DispatchCentreComponent({
   onPreviewRecord,
   emailTracking = {}
 }: DispatchCentreProps) {
+  const HEADER_BOX = "inline-flex items-center gap-1.5 h-8 px-2.5 rounded-md text-xs font-mono font-semibold leading-none whitespace-nowrap bg-slate-100 dark:bg-[#07152b] border border-slate-200 dark:border-[#132A4A] text-slate-800 dark:text-slate-200";
   const isControlled = searchQueryProp !== undefined;
   const initialSearch = isControlled ? (searchQueryProp || "") : "";
   const [localSearchInput, setLocalSearchInput] = useState(initialSearch);
@@ -824,6 +1016,41 @@ function DispatchCentreComponent({
     vouchersDatabase,
     assignedVoucherCodesSet,
     selectedHospital
+  ]);
+
+  const [avgPeriodDays, setAvgPeriodDays] = useState<AvgPerDayPeriod>(() => {
+    const saved = safeLocalStorage.getItem(AVG_PERIOD_STORAGE_KEY);
+    if (saved === "14") return 14;
+    if (saved === "30") return 30;
+    return 7;
+  });
+
+  const handleCycleAvgPeriod = useCallback(() => {
+    setAvgPeriodDays((prev) => {
+      const next: AvgPerDayPeriod = prev === 7 ? 14 : prev === 14 ? 30 : 7;
+      safeLocalStorage.setItem(AVG_PERIOD_STORAGE_KEY, String(next));
+      return next;
+    });
+  }, []);
+
+  const avgCodesPerDay = useMemo(() => {
+    return computeAverageCodesPerDay({
+      database,
+      periodDays: avgPeriodDays,
+      dispatchedKeysSet,
+      unsentKeysSet,
+      dispatchDates,
+      customVouchers,
+      processingDate
+    });
+  }, [
+    database,
+    avgPeriodDays,
+    dispatchedKeysSet,
+    unsentKeysSet,
+    dispatchDates,
+    customVouchers,
+    processingDate
   ]);
 
   const getIsCancelled = useCallback((record: CsvPermitRecord, idx?: number) => {
@@ -1589,7 +1816,23 @@ function DispatchCentreComponent({
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-2.5 ml-auto xl:ml-0 whitespace-nowrap shrink-0">
-            <span className="text-xs font-semibold px-2.5 py-1 rounded-md bg-slate-100 dark:bg-[#07152b] border border-slate-200 dark:border-[#132A4A] text-slate-800 dark:text-slate-200">
+            <button
+              type="button"
+              onClick={handleCycleAvgPeriod}
+              title={`Average codes used per day over the last ${avgPeriodDays} days. Cancelled permits excluded. Click to change period.`}
+              className={`${HEADER_BOX} hover:border-[#1A73E8] dark:hover:border-[#1A73E8] hover:ring-2 hover:ring-[#1A73E8]/20 active:translate-y-[1px] transition cursor-pointer shrink-0`}
+            >
+              <TrendingUp size={14} className="text-[#1A73E8] shrink-0" />
+              <span>Avg/day</span>
+              <span className="text-emerald-600 dark:text-emerald-400">
+                {avgCodesPerDay.toFixed(1)}
+              </span>
+              <span className="text-[10px] leading-none px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300">
+                {avgPeriodDays}d
+              </span>
+            </button>
+
+            <span className={HEADER_BOX}>
               {activeRecord ? `For #${activeRecord.formId || activeRecord.id} · ${activeRecord.vrm || 'No VRM'}` : "No permit selected"}
             </span>
 
@@ -1602,7 +1845,7 @@ function DispatchCentreComponent({
               return (
                 <span
                   title={`${fromUK} – ${toUK}`}
-                  className="text-xs font-mono font-medium px-2 py-1 rounded-md bg-slate-100 dark:bg-[#07152b] border border-slate-200 dark:border-[#132A4A] text-slate-700 dark:text-slate-300"
+                  className={HEADER_BOX}
                 >
                   {shortFrom} – {shortTo}
                 </span>
@@ -1621,10 +1864,10 @@ function DispatchCentreComponent({
               return (
                 <div
                   title={`${availableCount} of ${totalInWindow} codes left for ${formatDateUK(w.fromISO)} – ${formatDateUK(w.toISO)}`}
-                  className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-slate-100 dark:bg-[#07152b] border border-slate-200 dark:border-[#132A4A] text-xs font-mono"
+                  className={HEADER_BOX}
                 >
                   {needsWarningIcon && <span className="text-amber-500 text-[10px]">▲</span>}
-                  <span className={stockLvl === 'green' ? 'text-emerald-600 dark:text-emerald-400 font-bold' : stockLvl === 'amber' ? 'text-amber-600 dark:text-amber-400 font-bold' : 'text-rose-600 dark:text-rose-400 font-bold'}>
+                  <span className={stockLvl === 'green' ? 'text-emerald-600 dark:text-emerald-400' : stockLvl === 'amber' ? 'text-amber-600 dark:text-amber-400' : 'text-rose-600 dark:text-rose-400'}>
                     {availableCount}/{totalInWindow}
                   </span>
                   <div className="w-[54px] h-1.5 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
