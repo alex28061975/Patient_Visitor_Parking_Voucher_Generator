@@ -279,9 +279,11 @@ describe('Avg/day voucher usage calculation', () => {
       'Average codes used per day over the last 7 days. Cancelled permits excluded. Click to change period.'
     );
 
-    // Check immediate left sibling relationship with "For #..." box
-    const nextSibling = avgBtn.nextElementSibling;
-    assert.ok(nextSibling?.textContent?.includes('For #'), 'Avg/day chip must be immediately to the left of For # box');
+    // Check Avg/day is to the left of Stock and "For #..." box in the same header container
+    const headerChildren = Array.from(avgBtn.parentElement?.children || []);
+    const avgIdx = headerChildren.indexOf(avgBtn);
+    const forIdx = headerChildren.findIndex(el => el.textContent?.includes('For #'));
+    assert.ok(avgIdx >= 0 && forIdx > avgIdx, 'Avg/day chip must appear to the left of For # box');
 
     // Cycle 7 -> 14
     await act(async () => {

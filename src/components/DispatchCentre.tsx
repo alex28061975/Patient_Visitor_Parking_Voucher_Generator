@@ -27,7 +27,8 @@ import {
   Pencil,
   Eye,
   User,
-  TrendingUp
+  TrendingUp,
+  Hourglass
 } from "lucide-react";
 import { 
   CsvPermitRecord, 
@@ -54,6 +55,7 @@ import {
   cleanVoucherCodeValue,
   isVoucherCodeMatch,
   isVoucherInValidityPeriod,
+  isVoucherAvailableStatus,
   toTitleCase,
   isValidVRM,
   isLikelyDriverName,
@@ -321,6 +323,65 @@ export function computeAverageCodesPerDay({
   }
 
   return totalCodesUsed / periodDays;
+}
+
+export function computeUnusedStockCount({
+  vouchersDatabase,
+  database,
+  dispatchedKeysSet,
+  referenceDate
+}: {
+  vouchersDatabase: ParsedVoucherData[];
+  database: CsvPermitRecord[];
+  dispatchedKeysSet?: Set<string>;
+  referenceDate?: Date;
+}): number {
+  if (!vouchersDatabase || vouchersDatabase.length === 0) return 0;
+
+  const now = referenceDate ? new Date(referenceDate.getTime()) : new Date();
+  const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const assignedSet = buildAssignedCodeSet(database, null, dispatchedKeysSet);
+
+  let count = 0;
+  for (const v of vouchersDatabase) {
+    if (!isVoucherAvailableStatus(v)) continue;
+    if ((v as any).isWithdrawn === true) continue;
+
+    const status = String(v.status || "").toLowerCase().trim();
+    if (
+      status === "dispatched" ||
+      status === "cancelled" ||
+      status === "canceled" ||
+      status === "expired"
+    ) {
+      continue;
+    }
+
+    const codeUpper = cleanVoucherCodeValue(v.code).toUpperCase();
+    if (
+      !codeUpper ||
+      codeUpper === "-" ||
+      codeUpper === "CANCELLED" ||
+      codeUpper === "PENDING" ||
+      codeUpper === "BLOCKED" ||
+      codeUpper === "EXPIRED" ||
+      codeUpper === "N/A"
+    ) {
+      continue;
+    }
+
+    if (assignedSet.has(codeUpper)) continue;
+
+    const vFrom = getVoucherValidFromISO(v);
+    const vTo = getVoucherValidToISO(v) || (vFrom ? addDaysISO(vFrom, 6) : "");
+    if (vTo && /^\d{4}-\d{2}-\d{2}$/.test(vTo) && vTo < todayIso) {
+      continue;
+    }
+
+    count++;
+  }
+
+  return count;
 }
 
 export type SortKey = 
@@ -1052,6 +1113,40 @@ function DispatchCentreComponent({
     customVouchers,
     processingDate
   ]);
+
+  const stockRunway = useMemo(() => {
+    const stock = computeUnusedStockCount({
+      vouchersDatabase,
+      database,
+      dispatchedKeysSet
+    });
+
+    if (!avgCodesPerDay || avgCodesPerDay <= 0) {
+      return {
+        stock,
+        days: null as number | null,
+        label: "--",
+        colorClass: "text-slate-400 dark:text-slate-500",
+        title: `${stock} codes in stock · Need dispatch history to estimate days. Amber under 14 days, red under 7.`
+      };
+    }
+
+    const days = Math.floor(stock / avgCodesPerDay);
+    const colorClass =
+      days >= 14
+        ? "text-emerald-600 dark:text-emerald-400"
+        : days >= 7
+          ? "text-amber-600 dark:text-amber-400"
+          : "text-rose-600 dark:text-rose-400";
+
+    return {
+      stock,
+      days,
+      label: `~${days}d`,
+      colorClass,
+      title: `${stock} codes in stock ÷ ${avgCodesPerDay.toFixed(1)} per day = about ${days} days. Amber under 14 days, red under 7.`
+    };
+  }, [vouchersDatabase, database, dispatchedKeysSet, avgCodesPerDay]);
 
   const getIsCancelled = useCallback((record: CsvPermitRecord, idx?: number) => {
     if (!record) return false;
@@ -1831,6 +1926,15 @@ function DispatchCentreComponent({
                 {avgPeriodDays}d
               </span>
             </button>
+
+            <span
+              className={HEADER_BOX}
+              title={stockRunway.title}
+            >
+              <Hourglass size={14} className={`${stockRunway.colorClass} shrink-0`} />
+              <span>Stock</span>
+              <span className={stockRunway.colorClass}>{stockRunway.label}</span>
+            </span>
 
             <span className={HEADER_BOX}>
               {activeRecord ? `For #${activeRecord.formId || activeRecord.id} · ${activeRecord.vrm || 'No VRM'}` : "No permit selected"}
